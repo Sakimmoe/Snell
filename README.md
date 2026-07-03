@@ -10,7 +10,7 @@
 
 **示例（默认双栈）：**
 
-    bash <(curl -sL https://raw.githubusercontent.com/Sakimmoe/Snell/refs/heads/main/install.sh) 26216 MyPass123
+    bash <(curl -sL https://raw.githubusercontent.com/Sakimmoe/Snell/refs/heads/main/install.sh) 6666 RandomPass123
 
 > **参数说明：**
 > - **模式**（可选）：`d` 为双栈（默认），`4` 为纯 IPv4，`6` 为纯 IPv6。
