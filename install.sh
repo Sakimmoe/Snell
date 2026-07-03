@@ -27,10 +27,7 @@ RULE="precedence ::ffff:0:0/96  100"
 
 touch "$GAI_CONF"
 
-# 删除旧规则
 sed -i '/::ffff:0:0\/96/d' "$GAI_CONF" 2>/dev/null || true
-
-# 幂等防重复
 grep -q "::ffff:0:0/96" "$GAI_CONF" || echo "$RULE" >> "$GAI_CONF"
 
 # =========================
@@ -64,6 +61,17 @@ nameserver 8.8.8.8
 nameserver 2606:4700:4700::1111
 nameserver 2001:4860:4860::8888
 EOF
+
+# =========================
+# 🕒 时区
+# =========================
+echo "🕒 Setting timezone to Asia/Shanghai..."
+
+if command -v timedatectl >/dev/null 2>&1; then
+    timedatectl set-timezone Asia/Shanghai || true
+else
+    ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime || true
+fi
 
 # =========================
 # BBR + TFO
@@ -104,7 +112,7 @@ else
     MAIN_IP=${IPV4:-$IPV6}
 fi
 
-# IPv4 优先验证
+# IPv4 测试
 curl -4 -s --max-time 3 https://ip.sb || true
 
 # =========================
@@ -131,7 +139,7 @@ fi
 mkdir -p /root/snelldocker/snell-conf
 
 # =========================
-# compose
+# docker-compose
 # =========================
 cat > /root/snelldocker/docker-compose.yml << 'EOF'
 services:
@@ -147,7 +155,7 @@ services:
 EOF
 
 # =========================
-# snell conf
+# snell config
 # =========================
 cat > /root/snelldocker/snell-conf/snell.conf << EOF
 [snell-server]
@@ -170,7 +178,7 @@ docker compose pull || true
 docker compose up -d --force-recreate || true
 
 # =========================
-# 输出
+# 输出信息
 # =========================
 echo ""
 echo "=============================="
@@ -181,6 +189,7 @@ echo " IPv6     : $IPV6"
 echo " Port     : $SNELL_PORT"
 echo " PSK      : $SNELL_PSK"
 echo " IPv6     : $ENABLE_IPV6"
+echo " Timezone : Asia/Shanghai"
 echo " IPv4 pri : enabled (glibc address selection)"
 echo " BBR      : enabled"
 echo " TFO      : enabled"
