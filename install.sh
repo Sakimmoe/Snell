@@ -3,7 +3,7 @@ set -euo pipefail
 
 SNELL_PORT=${1:-26216}
 SNELL_PSK=${2:-kokonoeyukari}
-NET_MODE=${3:-d}
+NET_MODE=${3:-}
 
 echo "=============================="
 echo " Snell Auto Deploy Script"
@@ -36,9 +36,6 @@ grep -q "::ffff:0:0/96" "$GAI_CONF" || echo "$RULE" >> "$GAI_CONF"
 if [ "$NET_MODE" = "4" ]; then
     LISTEN_ADDR="0.0.0.0"
     ENABLE_IPV6="false"
-elif [ "$NET_MODE" = "6" ]; then
-    LISTEN_ADDR="::"
-    ENABLE_IPV6="true"
 else
     LISTEN_ADDR="::"
     ENABLE_IPV6="true"
@@ -106,13 +103,13 @@ IPV6=$(curl -6 -s --max-time 3 https://api.ipify.org \
     || curl -6 -s --max-time 3 https://ifconfig.me \
     || echo "无")
 
-if [ "$NET_MODE" = "6" ] && [ "$IPV6" != "无" ]; then
-    MAIN_IP=$IPV6
+# 双栈默认 IPv4 优先
+if [ "$NET_MODE" = "4" ]; then
+    MAIN_IP=$IPV4
 else
     MAIN_IP=${IPV4:-$IPV6}
 fi
 
-# IPv4 测试
 curl -4 -s --max-time 3 https://ip.sb || true
 
 # =========================
@@ -178,7 +175,7 @@ docker compose pull || true
 docker compose up -d --force-recreate || true
 
 # =========================
-# 输出信息
+# 输出
 # =========================
 echo ""
 echo "=============================="
@@ -188,9 +185,8 @@ echo " IPv4     : $IPV4"
 echo " IPv6     : $IPV6"
 echo " Port     : $SNELL_PORT"
 echo " PSK      : $SNELL_PSK"
-echo " IPv6     : $ENABLE_IPV6"
+echo " Mode     : $([ "$NET_MODE" = "4" ] && echo "IPv4 Only" || echo "Dual Stack")"
 echo " Timezone : Asia/Shanghai"
-echo " IPv4 pri : enabled (glibc address selection)"
 echo " BBR      : enabled"
 echo " TFO      : enabled"
 echo "=============================="
