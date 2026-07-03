@@ -1,117 +1,160 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-PORT=${1:-6666}
-PSK=${2:-$(openssl rand -base64 16 | tr -d '\n')}
-MODE=${3:-d}
+# 参数：端口 / 密码 / 网络模式
+SNELL_PORT=${1:-6666}
+SNELL_PSK=${2:-RandomPass123}
+NET_MODE=${3:-d}
 
 echo "=============================="
-echo " Snell Ultimate Stable v1"
+echo " Snell Auto Deploy Script"
 echo "=============================="
 
-#################################
-# root check
-#################################
-
-if [ "$EUID" -ne 0 ]; then
-  echo "❌ 请用 root 运行"
-  exit 1
+# =========================
+# 网络模式
+# =========================
+if [ "$NET_MODE" = "4" ]; then
+    LISTEN_ADDR="0.0.0.0"
+    ENABLE_IPV6="false"
+elif [ "$NET_MODE" = "6" ]; then
+    LISTEN_ADDR="::"
+    ENABLE_IPV6="true"
+else
+    LISTEN_ADDR="::"
+    ENABLE_IPV6="true"
 fi
 
-#################################
-# install deps
-#################################
+# =========================
+# DNS（避免 systemd stub 冲突）
+# =========================
+echo "🌐 Config DNS..."
 
-apt update -y
-apt install -y curl unzip ca-certificates
-
-#################################
-# download snell official
-#################################
-
-WORKDIR=/opt/snell
-mkdir -p $WORKDIR
-cd $WORKDIR
-
-echo "📦 下载 Snell 官方 binary..."
-
-curl -L -o snell.zip https://dl.nssurge.com/snell/snell-server-v5.0.1-linux-amd64.zip
-unzip -o snell.zip
-chmod +x snell-server
-
-#################################
-# network mode
-#################################
-
-ADDR="::"
-
-if [ "$MODE" = "4" ]; then
-  ADDR="0.0.0.0"
-elif [ "$MODE" = "6" ]; then
-  ADDR="::"
+if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+    systemctl disable systemd-resolved --now 2>/dev/null || true
 fi
 
-#################################
-# config
-#################################
+chattr -i /etc/resolv.conf 2>/dev/null || true
 
-cat > /etc/snell-server.conf <<EOF
+cat > /etc/resolv.conf << EOF
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+nameserver 2001:4860:4860::8888
+EOF
+
+# =========================
+# BBR + TFO
+# =========================
+echo "⚡ Enable BBR & TFO..."
+
+sysctl -w net.ipv4.tcp_fastopen=3 >/dev/null || true
+
+if ! grep -q "tcp_fastopen=3" /etc/sysctl.conf 2>/dev/null; then
+    echo "net.ipv4.tcp_fastopen=3" >> /etc/sysctl.conf
+fi
+
+if [ ! -f /etc/sysctl.d/99-bbr.conf ]; then
+cat > /etc/sysctl.d/99-bbr.conf << EOF
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+EOF
+fi
+
+sysctl --system >/dev/null || true
+
+# =========================
+# 获取 IP
+# =========================
+echo "📡 Detect IP..."
+
+IPV4=$(curl -4 -s --max-time 3 https://api.ipify.org || echo "无")
+IPV6=$(curl -6 -s --max-time 3 https://api6.ipify.org || echo "无")
+
+if [ "$NET_MODE" = "6" ] && [ "$IPV6" != "无" ]; then
+    MAIN_IP=$IPV6
+else
+    MAIN_IP=${IPV4:-$IPV6}
+fi
+
+# =========================
+# 清理旧环境
+# =========================
+if [ -d "/root/snelldocker" ]; then
+    echo "🧹 Cleaning old env..."
+    (cd /root/snelldocker && docker compose down) || true
+    rm -rf /root/snelldocker
+fi
+
+# =========================
+# Docker 安装（避免重复）
+# =========================
+echo "🐳 Checking Docker..."
+
+if ! command -v docker >/dev/null 2>&1; then
+    curl -fsSL https://get.docker.com | bash
+fi
+
+# =========================
+# 创建目录
+# =========================
+mkdir -p /root/snelldocker/snell-conf
+
+# =========================
+# docker-compose
+# =========================
+cat > /root/snelldocker/docker-compose.yml << 'EOF'
+services:
+  snell:
+    image: accors/snell:latest
+    container_name: snell
+    restart: always
+    network_mode: host
+    volumes:
+      - ./snell-conf/snell.conf:/etc/snell-server.conf
+    environment:
+      - SNELL_URL=https://dl.nssurge.com/snell/snell-server-v5.0.1-linux-amd64.zip
+EOF
+
+# =========================
+# Snell config（不改协议）
+# =========================
+cat > /root/snelldocker/snell-conf/snell.conf << EOF
 [snell-server]
-listen = ${ADDR}:${PORT}
-psk = ${PSK}
-ipv6 = true
+listen = ${LISTEN_ADDR}:${SNELL_PORT}
+psk = ${SNELL_PSK}
+ipv6 = ${ENABLE_IPV6}
 EOF
 
-#################################
-# systemd service
-#################################
+# 去 CRLF
+sed -i 's/\r//g' /root/snelldocker/snell-conf/snell.conf
+sed -i 's/\r//g' /root/snelldocker/docker-compose.yml
 
-cat > /etc/systemd/system/snell.service <<EOF
-[Unit]
-Description=Snell Server
-After=network.target
+# =========================
+# 启动
+# =========================
+echo "🚀 Starting Snell..."
 
-[Service]
-ExecStart=/opt/snell/snell-server -c /etc/snell-server.conf
-Restart=always
-LimitNOFILE=65535
+cd /root/snelldocker
 
-[Install]
-WantedBy=multi-user.target
-EOF
+docker compose pull || true
+docker compose up -d || true
 
-#################################
-# enable service
-#################################
-
-systemctl daemon-reload
-systemctl enable snell
-systemctl restart snell
-
-#################################
-# IP detect
-#################################
-
-IPV4=$(curl -s4 --connect-timeout 3 ifconfig.me || echo "无")
-IPV6=$(curl -s6 --connect-timeout 3 ifconfig.me || echo "无")
-
-MAIN_IP=$IPV4
-[ "$MODE" = "6" ] && [ "$IPV6" != "无" ] && MAIN_IP=$IPV6
-
-#################################
-# output
-#################################
-
+# =========================
+# 输出信息
+# =========================
 echo ""
 echo "=============================="
-echo " ✅ Snell 安装完成"
+echo " Snell Server Info"
 echo "=============================="
-echo " IP   : $MAIN_IP"
-echo " PORT : $PORT"
-echo " PSK  : $PSK"
-echo " MODE : $MODE"
+echo " IPv4     : $IPV4"
+echo " IPv6     : $IPV6"
+echo " Port     : $SNELL_PORT"
+echo " PSK      : $SNELL_PSK"
+echo " IPv6 Mode: $ENABLE_IPV6"
+echo " TFO      : enabled"
+echo " BBR      : enabled"
+echo " DNS      : 1.1.1.1 / 8.8.8.8 / 2001:4860:4860::8888"
 echo "=============================="
 echo ""
-echo "Surge 配置："
-echo "Snell_${PORT} = snell, ${MAIN_IP}, ${PORT}, psk=${PSK}, version=5, tfo=true, reuse=true, ecn=true"
+echo "Surge config:"
+echo "Snell_${SNELL_PORT} = snell, ${MAIN_IP}, ${SNELL_PORT}, psk=${SNELL_PSK}, version=5, tfo=true, reuse=true, ecn=true"
 echo "=============================="
