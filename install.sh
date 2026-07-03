@@ -30,11 +30,8 @@ touch "$GAI_CONF"
 # 删除旧规则
 sed -i '/::ffff:0:0\/96/d' "$GAI_CONF" 2>/dev/null || true
 
-# 保证换行
-sed -i -e '$a\' "$GAI_CONF"
-
-# 写入
-echo "$RULE" >> "$GAI_CONF"
+# 幂等防重复
+grep -q "::ffff:0:0/96" "$GAI_CONF" || echo "$RULE" >> "$GAI_CONF"
 
 # =========================
 # 网络模式
@@ -93,8 +90,13 @@ sysctl --system >/dev/null || true
 # =========================
 echo "📡 Detect IP..."
 
-IPV4=$(curl -4 -s --max-time 3 https://api.ipify.org || echo "无")
-IPV6=$(curl -6 -s --max-time 3 https://api6.ipify.org || echo "无")
+IPV4=$(curl -4 -s --max-time 3 https://api.ipify.org \
+    || curl -4 -s --max-time 3 https://ifconfig.me \
+    || echo "无")
+
+IPV6=$(curl -6 -s --max-time 3 https://api.ipify.org \
+    || curl -6 -s --max-time 3 https://ifconfig.me \
+    || echo "无")
 
 if [ "$NET_MODE" = "6" ] && [ "$IPV6" != "无" ]; then
     MAIN_IP=$IPV6
@@ -165,7 +167,7 @@ echo "🚀 Starting..."
 cd /root/snelldocker
 
 docker compose pull || true
-docker compose up -d || true
+docker compose up -d --force-recreate || true
 
 # =========================
 # 输出
@@ -179,7 +181,7 @@ echo " IPv6     : $IPV6"
 echo " Port     : $SNELL_PORT"
 echo " PSK      : $SNELL_PSK"
 echo " IPv6     : $ENABLE_IPV6"
-echo " IPv4 pri : enabled (gai.conf)"
+echo " IPv4 pri : enabled (glibc address selection)"
 echo " BBR      : enabled"
 echo " TFO      : enabled"
 echo "=============================="
