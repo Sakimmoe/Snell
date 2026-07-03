@@ -1,14 +1,40 @@
 #!/bin/bash
 set -euo pipefail
 
-# 参数：端口 / 密码 / 网络模式
-SNELL_PORT=${1:-6666}
-SNELL_PSK=${2:-RandomPass123}
+SNELL_PORT=${1:-26216}
+SNELL_PSK=${2:-kokonoeyukari}
 NET_MODE=${3:-d}
 
 echo "=============================="
 echo " Snell Auto Deploy Script"
 echo "=============================="
+
+# =========================
+# root check
+# =========================
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: Run as root"
+  exit 1
+fi
+
+# =========================
+# IPv4 优先
+# =========================
+echo "🌐 Setting IPv4 priority..."
+
+GAI_CONF="/etc/gai.conf"
+RULE="precedence ::ffff:0:0/96  100"
+
+touch "$GAI_CONF"
+
+# 删除旧规则
+sed -i '/::ffff:0:0\/96/d' "$GAI_CONF" 2>/dev/null || true
+
+# 保证换行
+sed -i -e '$a\' "$GAI_CONF"
+
+# 写入
+echo "$RULE" >> "$GAI_CONF"
 
 # =========================
 # 网络模式
@@ -62,7 +88,7 @@ fi
 sysctl --system >/dev/null || true
 
 # =========================
-# 获取 IP
+# IP 获取
 # =========================
 echo "📡 Detect IP..."
 
@@ -75,6 +101,9 @@ else
     MAIN_IP=${IPV4:-$IPV6}
 fi
 
+# IPv4 优先验证
+curl -4 -s --max-time 3 https://ip.sb || true
+
 # =========================
 # 清理旧环境
 # =========================
@@ -85,7 +114,7 @@ if [ -d "/root/snelldocker" ]; then
 fi
 
 # =========================
-# Docker 安装
+# Docker
 # =========================
 echo "🐳 Checking Docker..."
 
@@ -94,12 +123,12 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 # =========================
-# 创建目录
+# 目录
 # =========================
 mkdir -p /root/snelldocker/snell-conf
 
 # =========================
-# docker-compose
+# compose
 # =========================
 cat > /root/snelldocker/docker-compose.yml << 'EOF'
 services:
@@ -115,7 +144,7 @@ services:
 EOF
 
 # =========================
-# Snell config
+# snell conf
 # =========================
 cat > /root/snelldocker/snell-conf/snell.conf << EOF
 [snell-server]
@@ -124,14 +153,13 @@ psk = ${SNELL_PSK}
 ipv6 = ${ENABLE_IPV6}
 EOF
 
-# 去 CRLF
 sed -i 's/\r//g' /root/snelldocker/snell-conf/snell.conf
 sed -i 's/\r//g' /root/snelldocker/docker-compose.yml
 
 # =========================
 # 启动
 # =========================
-echo "🚀 Starting Snell..."
+echo "🚀 Starting..."
 
 cd /root/snelldocker
 
@@ -139,22 +167,23 @@ docker compose pull || true
 docker compose up -d || true
 
 # =========================
-# 输出信息
+# 输出
 # =========================
 echo ""
 echo "=============================="
-echo " Snell Server Info"
+echo " Snell Info"
 echo "=============================="
 echo " IPv4     : $IPV4"
 echo " IPv6     : $IPV6"
 echo " Port     : $SNELL_PORT"
 echo " PSK      : $SNELL_PSK"
-echo " IPv6 Mode: $ENABLE_IPV6"
-echo " TFO      : enabled"
+echo " IPv6     : $ENABLE_IPV6"
+echo " IPv4 pri : enabled (gai.conf)"
 echo " BBR      : enabled"
-echo " DNS      : 1.1.1.1 / 8.8.8.8 / 2001:4860:4860::8888"
+echo " TFO      : enabled"
 echo "=============================="
+
 echo ""
-echo "Surge config:"
+echo "Surge:"
 echo "Snell_${SNELL_PORT} = snell, ${MAIN_IP}, ${SNELL_PORT}, psk=${SNELL_PSK}, version=5, tfo=true, reuse=true, ecn=true"
 echo "=============================="
