@@ -13,7 +13,7 @@
     bash <(curl -sL https://raw.githubusercontent.com/Sakimmoe/Snell/refs/heads/main/install.sh) 6666 RandomPass123
 
 > **参数说明：**
-> - **模式**（可选）：`d` 为双栈（默认），`4` 为纯 IPv4，`6` 为纯 IPv6。
+> - **模式**（可选）：命令末尾加`4` 为纯 IPv4模式。
 
 ## 自动更新与重置
 
