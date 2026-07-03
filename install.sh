@@ -25,7 +25,7 @@ else
 fi
 
 # =========================
-# DNS（避免 systemd stub 冲突）
+# DNS
 # =========================
 echo "🌐 Config DNS..."
 
@@ -85,7 +85,7 @@ if [ -d "/root/snelldocker" ]; then
 fi
 
 # =========================
-# Docker 安装（避免重复）
+# Docker 安装
 # =========================
 echo "🐳 Checking Docker..."
 
@@ -115,7 +115,7 @@ services:
 EOF
 
 # =========================
-# Snell config（不改协议）
+# Snell config
 # =========================
 cat > /root/snelldocker/snell-conf/snell.conf << EOF
 [snell-server]
