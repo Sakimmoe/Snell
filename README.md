@@ -4,7 +4,7 @@
 
 ## 部署方法
 
-在服务器终端运行以下命令，并在末尾加上你想设置的端口和密码：
+在服务器终端运行以下命令，**并在末尾加上你想设置的端口和密码**：
 
 ```bash
 bash <(curl -sL [https://raw.githubusercontent.com/Sakimmoe/Snell/refs/heads/main/install.sh](https://raw.githubusercontent.com/Sakimmoe/Snell/refs/heads/main/install.sh)) 你的端口 你的密码
