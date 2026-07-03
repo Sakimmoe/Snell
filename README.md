@@ -7,12 +7,12 @@
 在服务器终端运行以下命令，并在末尾加上你想设置的端口和密码：
 
 ```bash
-bash <(curl -sL [https://raw.githubusercontent.com/Sakimmoe/Snell/refs/heads/main/install.sh](https://raw.githubusercontent.com/Sakimmoe/Snell/refs/heads/main/install.sh)) <你的端口> <你的密码>
+bash <(curl -sL [https://raw.githubusercontent.com/Sakimmoe/Snell/refs/heads/main/install.sh](https://raw.githubusercontent.com/Sakimmoe/Snell/refs/heads/main/install.sh)) 你的端口 你的密码
 ```
 
 **示例：**
 ```bash
-bash <(curl -sL [https://raw.githubusercontent.com/Sakimmoe/Snell/refs/heads/main/install.sh](https://raw.githubusercontent.com/Sakimmoe/Snell/refs/heads/main/install.sh)) 50000 MySecurePass
+bash <(curl -sL [https://raw.githubusercontent.com/Sakimmoe/Snell/refs/heads/main/install.sh](https://raw.githubusercontent.com/Sakimmoe/Snell/refs/heads/main/install.sh)) 6666 RandomPass123
 ```
 > 如果不加任何参数直接运行，脚本会使用默认的占位数据（端口 6666，密码 RandomPass123）进行测试。
 
