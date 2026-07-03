@@ -1,25 +1,27 @@
 #!/bin/bash
-set -e 
+set -e
 
-# ─── 参数化逻辑：接收端口(参数1)和密码(参数2) ───
-# 如果没传参数，则使用默认端口和密码。
+# 参数处理
 SNELL_PORT=${1:-"6666"}
 SNELL_PSK=${2:-"RandomPass123"}
 
-echo "=========================================="
-echo "          开始部署 Snell        "
-echo "=========================================="
-echo "当前启用的 Snell 端口为: ${SNELL_PORT}"
-echo "当前启用的 Snell 密码为: ${SNELL_PSK}"
-echo "=========================================="
+# 清理旧环境
+if [ -d "/root/snelldocker" ]; then
+    echo "🔄 清理旧环境..."
+    cd /root/snelldocker && docker compose down 2>/dev/null || true
+    rm -rf /root/snelldocker
+fi
 
-echo "1. 开始安装 Docker..."
+echo "部署配置: 端口 ${SNELL_PORT}, 密码 ${SNELL_PSK}"
+
+# 安装依赖
+echo "1. 安装 Docker..."
 bash <(curl -sL 'https://get.docker.com')
 
-echo "2. 创建目录结构..."
+echo "2. 创建配置..."
 mkdir -p /root/snelldocker/snell-conf
 
-echo "3. 生成 docker-compose.yml..."
+# 生成 Compose 文件
 cat > /root/snelldocker/docker-compose.yml << 'EOF'
 services:
   snell:
@@ -33,8 +35,7 @@ services:
       - SNELL_URL=https://dl.nssurge.com/snell/snell-server-v5.0.1-linux-amd64.zip
 EOF
 
-echo "4. 生成 snell.conf..."
-# 这里允许解析我们传入的 $SNELL_PORT 和 $SNELL_PSK
+# 生成配置文件
 cat > /root/snelldocker/snell-conf/snell.conf << EOF
 [snell-server]
 listen = 0.0.0.0:${SNELL_PORT}
@@ -42,15 +43,14 @@ psk = ${SNELL_PSK}
 ipv6 = false
 EOF
 
-echo "5. 自动修复配置文件换行符格式..."
+# 格式修复
 sed -i 's/\r//g' /root/snelldocker/snell-conf/snell.conf
 sed -i 's/\r//g' /root/snelldocker/docker-compose.yml
 
-echo "6. 正在拉取镜像并启动容器..."
+# 启动服务
+echo "3. 启动容器..."
 cd /root/snelldocker
 docker compose pull
 docker compose up -d
 
-echo "=========================================="
-echo "✅ Snell 部署完成！"
-echo "=========================================="
+echo "✅ 部署完成！"
