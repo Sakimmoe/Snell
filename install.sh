@@ -1,8 +1,16 @@
 #!/bin/bash
-set -e # 遇到错误时自动停止运行
+set -e 
+
+# ─── 终极参数化逻辑：接收端口(参数1)和密码(参数2) ───
+# 如果没传参数，则使用毫无用处的假数据作为保护色
+SNELL_PORT=${1:-"6666"}
+SNELL_PSK=${2:-"RandomPass123"}
 
 echo "=========================================="
-echo "          开始安装并部署 Snell            "
+echo "          开始部署 Snell        "
+echo "=========================================="
+echo "当前启用的 Snell 端口为: ${SNELL_PORT}"
+echo "当前启用的 Snell 密码为: ${SNELL_PSK}"
 echo "=========================================="
 
 echo "1. 开始安装 Docker..."
@@ -26,10 +34,11 @@ services:
 EOF
 
 echo "4. 生成 snell.conf..."
-cat > /root/snelldocker/snell-conf/snell.conf << 'EOF'
+# 这里允许解析我们传入的 $SNELL_PORT 和 $SNELL_PSK
+cat > /root/snelldocker/snell-conf/snell.conf << EOF
 [snell-server]
-listen = 0.0.0.0:26216
-psk = kokonoyu9162799.Y
+listen = 0.0.0.0:${SNELL_PORT}
+psk = ${SNELL_PSK}
 ipv6 = false
 EOF
 
@@ -43,5 +52,5 @@ docker compose pull
 docker compose up -d
 
 echo "=========================================="
-echo "✅ Snell 部署完成并已在后台运行！"
+echo "✅ Snell 部署完成！"
 echo "=========================================="
