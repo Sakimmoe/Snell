@@ -11,6 +11,7 @@
 ```bash
 bash <(curl -sL https://raw.githubusercontent.com/Sakimmoe/Snell-Docker/main/install.sh) 端口 密码 模式
 ```
+不填写端口密码模式的话默认开启双栈，端口为26216 密码为kokonoeyukari
 
 ### 示例（IPv4 + IPv6 双栈）
 
