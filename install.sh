@@ -7,7 +7,7 @@ SNELL_PSK=${2:-kokonoeyukari}
 NET_MODE=${3:-}
 
 echo "=============================="
-echo " Snell 一体化部署脚本（最终修复版）"
+echo " Snell 一体化部署脚本（固定镜像版）"
 echo "=============================="
 
 if [ "$EUID" -ne 0 ]; then
@@ -25,7 +25,7 @@ else
 fi
 
 if [ "$CODENAME" = "bullseye" ]; then
-    echo "检测到 Debian 11 (Bullseye)，正在修复软件源（已移除失效的 security 仓库）..."
+    echo "检测到 Debian 11 (Bullseye)，正在修复软件源..."
     cat > /etc/apt/sources.list << 'EOF'
 deb http://archive.debian.org/debian bullseye main contrib non-free
 deb http://archive.debian.org/debian bullseye-updates main contrib non-free
@@ -35,10 +35,7 @@ fi
 
 apt-get update -qq || true
 
-# ==================== 2. 安装基础工具 + 系统优化 ====================
-echo "-> 安装基础工具..."
-apt-get install -y curl wget iproute2 cron 2>/dev/null || true
-
+# ==================== 2. 系统优化 ====================
 echo "🌐 Setting IPv4 priority..."
 if ! grep -q "precedence ::ffff:0:0/96 100" /etc/gai.conf 2>/dev/null; then
     echo "precedence ::ffff:0:0/96 100" >> /etc/gai.conf
@@ -83,7 +80,7 @@ else
     ENABLE_IPV6="true"
 fi
 
-# ==================== 4. 部署 Snell ====================
+# ==================== 4. 部署 Snell（使用固定版本镜像） ====================
 if [ -d "/root/snelldocker" ]; then
     (cd /root/snelldocker && docker compose down) || true
     rm -rf /root/snelldocker
@@ -102,7 +99,7 @@ mkdir -p /root/snelldocker/snell-conf
 cat > /root/snelldocker/docker-compose.yml << 'EOF'
 services:
   snell:
-    image: accors/snell:latest
+    image: accors/snell:v5.0.1
     container_name: snell
     restart: always
     network_mode: host
@@ -124,18 +121,17 @@ sed -i 's/\r//g' /root/snelldocker/docker-compose.yml
 
 echo "🚀 Starting Snell..."
 cd /root/snelldocker
-docker compose pull || true
-docker compose up -d --force-recreate || true
+docker compose pull
+docker compose up -d --force-recreate
 
 echo "✅ Snell 容器已启动"
 
-# ==================== 5. ufw + fail2ban + 每周清理（最后执行） ====================
+# ==================== 5. ufw + fail2ban + 每周清理 ====================
 echo ""
 echo "🛡️ 配置 ufw + fail2ban + 每周日 07:07 清理..."
 
 apt-get install -y ufw fail2ban 2>/dev/null || true
 
-# 检测 SSH 端口
 SSH_PORT=22
 if command -v sshd >/dev/null 2>&1; then
     DETECTED=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}' || true)
@@ -149,7 +145,6 @@ ufw allow ${SSH_PORT}/tcp comment 'SSH' 2>/dev/null || true
 ufw allow ${SNELL_PORT}/tcp comment 'Snell' 2>/dev/null || true
 ufw allow ${SNELL_PORT}/udp comment 'Snell' 2>/dev/null || true
 
-# fail2ban 配置（最大重试3次，拉黑7小时）
 cat > /etc/fail2ban/jail.d/ssh.conf << 'JAILEOF'
 [sshd]
 enabled = true
@@ -162,11 +157,9 @@ JAILEOF
 systemctl enable fail2ban 2>/dev/null || true
 systemctl restart fail2ban 2>/dev/null || true
 
-# 启用 ufw
 echo "🔥 启用 ufw..."
 ufw --force enable 2>/dev/null || echo "ufw enable 完成或已启用"
 
-# 每周日 07:07 清理任务
 cat > /etc/cron.d/snell-cleanup << 'CRONEOF'
 7 7 * * 0 root /bin/bash -c '
   echo "[$(date \"+%F %T\")] Starting weekly cleanup..." >> /var/log/snell-cleanup.log 2>/dev/null || true
