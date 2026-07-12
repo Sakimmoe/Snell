@@ -7,7 +7,7 @@ SNELL_PSK=${2:-kokonoeyukari}
 NET_MODE=${3:-}
 
 echo "=============================="
-echo " Snell 一体化部署脚本（含 ufw + fail2ban + 定时清理）"
+echo " Snell 一体化部署脚本（最终修复版）"
 echo "=============================="
 
 if [ "$EUID" -ne 0 ]; then
@@ -15,18 +15,38 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-# ==================== 系统基础准备 ====================
-echo "-> 系统更新与准备..."
+# ==================== 1. 修复 Debian 11 (Bullseye) 软件源 ====================
+echo "-> 检查并修复 APT 软件源..."
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    CODENAME="${VERSION_CODENAME:-}"
+else
+    CODENAME=""
+fi
+
+if [ "$CODENAME" = "bullseye" ]; then
+    echo "检测到 Debian 11 (Bullseye)，正在修复软件源..."
+    cat > /etc/apt/sources.list << 'EOF'
+deb http://archive.debian.org/debian bullseye main contrib non-free
+deb http://archive.debian.org/debian bullseye-updates main contrib non-free
+deb http://archive.debian.org/debian-security bullseye-security main contrib non-free
+EOF
+    # 删除可能存在的旧 debian.sources 文件
+    rm -f /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
+fi
+
 apt-get update -qq || true
+
+# ==================== 2. 安装基础工具 ====================
+echo "-> 安装基础工具..."
 apt-get install -y curl wget iproute2 cron 2>/dev/null || true
 
-# IPv4 优先
+# ==================== 3. IPv4 优先 + DNS + 时区 + BBR ====================
 echo "🌐 Setting IPv4 priority..."
 if ! grep -q "precedence ::ffff:0:0/96 100" /etc/gai.conf 2>/dev/null; then
     echo "precedence ::ffff:0:0/96 100" >> /etc/gai.conf
 fi
 
-# DNS
 echo "🌐 Config DNS..."
 if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
     systemctl disable systemd-resolved --now 2>/dev/null || true
@@ -39,11 +59,9 @@ nameserver 2606:4700:4700::1111
 nameserver 2001:4860:4860::8888
 EOF
 
-# 时区
 echo "🕒 Setting timezone to Asia/Shanghai..."
 timedatectl set-timezone Asia/Shanghai 2>/dev/null || true
 
-# BBR + TFO
 echo "⚡ Enable BBR & TFO..."
 sysctl -w net.ipv4.tcp_fastopen=3 >/dev/null || true
 if [ ! -f /etc/sysctl.d/99-bbr.conf ]; then
@@ -54,7 +72,7 @@ EOF
 fi
 sysctl --system >/dev/null || true
 
-# ==================== Snell 部署（优先保证能跑起来） ====================
+# ==================== 4. IP 获取 ====================
 echo "📡 Detect IP..."
 IPV4=$(curl -4 -s --max-time 5 https://api.ipify.org || curl -4 -s --max-time 5 https://ifconfig.me || echo "无")
 IPV6=$(curl -6 -s --max-time 5 https://api.ipify.org || curl -6 -s --max-time 5 https://ifconfig.me || echo "无")
@@ -68,6 +86,7 @@ else
     ENABLE_IPV6="true"
 fi
 
+# ==================== 5. 部署 Snell ====================
 if [ -d "/root/snelldocker" ]; then
     (cd /root/snelldocker && docker compose down) || true
     rm -rf /root/snelldocker
@@ -102,6 +121,7 @@ listen = ${LISTEN_ADDR}:${SNELL_PORT}
 psk = ${SNELL_PSK}
 ipv6 = ${ENABLE_IPV6}
 EOF
+
 sed -i 's/\r//g' /root/snelldocker/snell-conf/snell.conf
 sed -i 's/\r//g' /root/snelldocker/docker-compose.yml
 
@@ -110,11 +130,11 @@ cd /root/snelldocker
 docker compose pull || true
 docker compose up -d --force-recreate || true
 
-echo "✅ Snell 容器已启动（即使后面 ufw 断连也没关系）"
+echo "✅ Snell 容器已启动"
 
-# ==================== ufw + fail2ban + 定时清理（放到最后） ====================
+# ==================== 6. ufw + fail2ban + 每周清理（最后执行） ====================
 echo ""
-echo "🛡️ 开始配置 ufw + fail2ban + 每周清理..."
+echo "🛡️ 配置 ufw + fail2ban + 每周日 07:07 清理..."
 
 apt-get install -y ufw fail2ban 2>/dev/null || true
 
@@ -126,7 +146,7 @@ if command -v sshd >/dev/null 2>&1; then
 fi
 echo "检测到 SSH 端口: $SSH_PORT"
 
-# 配置 ufw 规则
+# ufw 规则配置
 ufw default deny incoming 2>/dev/null || true
 ufw default allow outgoing 2>/dev/null || true
 ufw allow ${SSH_PORT}/tcp comment 'SSH' 2>/dev/null || true
@@ -147,10 +167,10 @@ systemctl enable fail2ban 2>/dev/null || true
 systemctl restart fail2ban 2>/dev/null || true
 
 # 启用 ufw
-echo "🔥 正在启用 ufw（此步可能导致 SSH 短暂中断）..."
-ufw --force enable 2>/dev/null || echo "ufw enable 可能失败或已启用"
+echo "🔥 启用 ufw..."
+ufw --force enable 2>/dev/null || echo "ufw enable 完成或已启用"
 
-# 每周日 07:07 清理
+# 每周日 07:07 清理任务
 cat > /etc/cron.d/snell-cleanup << 'CRONEOF'
 7 7 * * 0 root /bin/bash -c '
   echo "[$(date \"+%F %T\")] Starting weekly cleanup..." >> /var/log/snell-cleanup.log 2>/dev/null || true
@@ -186,5 +206,4 @@ echo "Surge 配置："
 echo "Snell_${SNELL_PORT} = snell, ${MAIN_IP}, ${SNELL_PORT}, psk=${SNELL_PSK}, version=5, tfo=true, reuse=true, ecn=true"
 echo "=============================="
 echo ""
-echo "如果刚才 ufw 那一步 SSH 断开了，请重新连接后执行："
-echo "ufw status && docker ps"
+echo "✅ 部署完成！如 ufw 步骤中 SSH 断开，请重新连接后执行：ufw status && docker ps"
