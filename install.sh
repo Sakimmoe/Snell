@@ -17,7 +17,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # =========================
-# 🔧 智能 APT 源检测
+# 🔧 Bullseye 源检测（仅在需要时切换 archive）
 # =========================
 echo "🔧 Checking APT sources..."
 
@@ -32,19 +32,19 @@ else
 fi
 
 if [ "$CODENAME" = "bullseye" ]; then
-    echo "🔄 Testing current APT sources..."
+    echo "🔄 Testing current APT sources for Bullseye..."
     NEED_ARCHIVE=false
 
     if ! apt-get update -qq >/tmp/apt_update.log 2>&1; then
         if grep -qE "(404 Not Found|Release file.*not found|does not have a Release file)" /tmp/apt_update.log; then
-            echo "⚠️ Broken APT sources detected. Switching to archive.debian.org..."
+            echo "⚠️ Broken sources detected. Switching to archive.debian.org..."
             NEED_ARCHIVE=true
         else
             echo "⚠️ apt-get update failed (not due to missing Release file)."
             tail -10 /tmp/apt_update.log
         fi
     else
-        echo "✅ Current APT sources working normally."
+        echo "✅ Current APT sources working."
     fi
 
     if [ "$NEED_ARCHIVE" = true ]; then
@@ -57,18 +57,44 @@ EOF
             echo "❌ Failed to update from archive.debian.org"
             exit 1
         fi
-        echo "✅ Successfully switched to archive.debian.org"
+        echo "✅ Switched to archive.debian.org"
     fi
 fi
 
 # =========================
-# 📦 安装基础依赖（严格模式）
+# 🌐 DNS 配置（提前到所有 apt 操作之前）
 # =========================
-echo "🔄 Installing base packages..."
+echo "🌐 Configuring DNS (early)..."
+
+if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+    systemctl disable systemd-resolved --now 2>/dev/null || true
+fi
+
+if [ -L /etc/resolv.conf ]; then
+    rm -f /etc/resolv.conf
+fi
+chattr -i /etc/resolv.conf 2>/dev/null || true
+
+cat > /etc/resolv.conf << EOF
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+nameserver 2606:4700:4700::1111
+nameserver 2001:4860:4860::8888
+EOF
+
+echo "✅ DNS configured"
+
+# =========================
+# 📦 更新索引 + 安装基础依赖
+# =========================
+echo "🔄 Updating package index..."
+apt-get update
+
+echo "📦 Installing base packages..."
 apt-get install -y curl wget ufw fail2ban cron ca-certificates
 
 # =========================
-# 网络/BBR/时区配置
+# IPv4 优先 + BBR + 时区
 # =========================
 echo "🌐 Setting IPv4 priority..."
 GAI_CONF="/etc/gai.conf"
@@ -83,19 +109,6 @@ else
     LISTEN_ADDR="::"
     ENABLE_IPV6="true"
 fi
-
-echo "🌐 Configuring DNS..."
-if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
-    systemctl disable systemd-resolved --now 2>/dev/null || true
-fi
-[ -L /etc/resolv.conf ] && rm -f /etc/resolv.conf
-chattr -i /etc/resolv.conf 2>/dev/null || true
-cat > /etc/resolv.conf << EOF
-nameserver 1.1.1.1
-nameserver 8.8.8.8
-nameserver 2606:4700:4700::1111
-nameserver 2001:4860:4860::8888
-EOF
 
 echo "🕒 Setting timezone to Asia/Shanghai..."
 if command -v timedatectl >/dev/null 2>&1; then
@@ -116,7 +129,7 @@ fi
 sysctl --system >/dev/null || true
 
 # =========================
-# 🛡️ UFW（先 reset）
+# 🛡️ UFW
 # =========================
 echo "🛡️ Configuring UFW..."
 ufw --force reset
@@ -162,16 +175,27 @@ chmod 644 /etc/cron.d/system-cleanup
 systemctl restart cron 2>/dev/null || systemctl restart crond 2>/dev/null || true
 
 # =========================
-# 📡 获取公网 IP
+# 📡 获取公网 IP（带更快超时 + 兜底）
 # =========================
 echo "📡 Detecting public IP..."
-IPV4=$(curl -4 -s --max-time 4 https://api.ipify.org || curl -4 -s --max-time 4 https://ifconfig.me || echo "无")
-IPV6=$(curl -6 -s --max-time 4 https://api.ipify.org || curl -6 -s --max-time 4 https://ifconfig.me || echo "无")
+
+IPV4=$(curl -4 -s --connect-timeout 2 --max-time 4 https://api.ipify.org 2>/dev/null || \
+       curl -4 -s --connect-timeout 2 --max-time 4 https://ifconfig.me 2>/dev/null || \
+       echo "无")
+
+IPV6=$(curl -6 -s --connect-timeout 2 --max-time 4 https://api.ipify.org 2>/dev/null || \
+       curl -6 -s --connect-timeout 2 --max-time 4 https://ifconfig.me 2>/dev/null || \
+       echo "无")
 
 if [ "$NET_MODE" = "4" ]; then
     MAIN_IP=$IPV4
 else
     MAIN_IP=$([ "$IPV4" != "无" ] && echo "$IPV4" || echo "$IPV6")
+fi
+
+if [ "$MAIN_IP" = "无" ]; then
+    MAIN_IP="<SERVER_IP>"
+    echo "⚠️ Failed to auto-detect public IP. Please replace <SERVER_IP> manually in Surge config."
 fi
 
 # =========================
@@ -195,11 +219,9 @@ systemctl enable docker --now
 
 if ! docker version >/dev/null 2>&1; then
     echo "❌ Docker daemon is not responding."
-    systemctl status docker --no-pager || true
     exit 1
 fi
 
-# Docker Compose 安装（严格模式）
 if ! docker compose version >/dev/null 2>&1; then
     echo "🔧 Installing docker-compose-plugin..."
     apt-get install -y docker-compose-plugin
@@ -249,7 +271,7 @@ docker compose up -d --force-recreate
 sleep 3
 
 if ! docker ps --format '{{.Names}}' | grep -q '^snell$'; then
-    echo "❌ Snell container failed to start or exited!"
+    echo "❌ Snell container failed to start!"
     docker compose logs --tail=50
     exit 1
 fi
@@ -272,7 +294,7 @@ echo " Timezone : Asia/Shanghai"
 echo " BBR/TFO  : enabled"
 echo " UFW      : Reset + Enabled"
 echo " Fail2ban : Enabled"
-echo " Docker   : Verified & Running"
+echo " Docker   : Verified"
 echo "=============================="
 echo ""
 echo "Surge 配置："
