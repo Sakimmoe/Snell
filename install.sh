@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+# 强制非交互模式，防止安装软件时弹窗卡死
+export DEBIAN_FRONTEND=noninteractive
+
 SNELL_PORT=${1:-26216}
 SNELL_PSK=${2:-kokonoeyukari}
 NET_MODE=${3:-}
@@ -18,6 +21,13 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # =========================
+# 📦 基础设施与依赖安装
+# =========================
+echo "🔄 Updating APT sources & Installing base tools..."
+apt-get update -y -qq || true
+apt-get install -y -qq curl wget ufw fail2ban cron || true
+
+# =========================
 # IPv4 优先
 # =========================
 echo "🌐 Setting IPv4 priority..."
@@ -26,7 +36,6 @@ GAI_CONF="/etc/gai.conf"
 RULE="precedence ::ffff:0:0/96  100"
 
 touch "$GAI_CONF"
-
 sed -i '/::ffff:0:0\/96/d' "$GAI_CONF" 2>/dev/null || true
 grep -q "::ffff:0:0/96" "$GAI_CONF" || echo "$RULE" >> "$GAI_CONF"
 
@@ -50,6 +59,10 @@ if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
     systemctl disable systemd-resolved --now 2>/dev/null || true
 fi
 
+# 解除可能存在的软链接，确保写入成功
+if [ -L /etc/resolv.conf ]; then
+    rm -f /etc/resolv.conf
+fi
 chattr -i /etc/resolv.conf 2>/dev/null || true
 
 cat > /etc/resolv.conf << EOF
@@ -91,10 +104,66 @@ fi
 sysctl --system >/dev/null || true
 
 # =========================
-# IP 获取
+# 🛡️ 防火墙配置 (UFW)
+# =========================
+echo "🛡️ Config Firewall (UFW)..."
+
+# 动态获取 SSH 端口防失联
+if command -v sshd >/dev/null 2>&1; then
+    SSH_PORT=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}' || true)
+else
+    SSH_PORT=""
+fi
+[ -n "$SSH_PORT" ] || SSH_PORT=22
+
+ufw default deny incoming
+ufw default allow outgoing
+
+ufw allow ${SSH_PORT}/tcp comment 'SSH'
+ufw allow 80/tcp comment 'HTTP'
+ufw allow 443/tcp comment 'HTTPS'
+ufw allow ${SNELL_PORT}/tcp comment 'Snell TCP'
+ufw allow ${SNELL_PORT}/udp comment 'Snell UDP'
+
+ufw --force enable
+
+# =========================
+# 🛡️ 防爆破配置 (Fail2ban)
+# =========================
+echo "🛡️ Config Fail2ban..."
+
+cat > /etc/fail2ban/jail.local <<EOF
+[DEFAULT]
+ignoreip = 127.0.0.1/8 ::1
+bantime = 7h
+findtime = 10m
+maxretry = 3
+
+[sshd]
+enabled = true
+backend = systemd
+port = ${SSH_PORT}
+EOF
+
+systemctl enable fail2ban --now
+systemctl restart fail2ban
+
+# =========================
+# 🧹 定时清理任务 (每周日 07:07)
+# =========================
+echo "🧹 Setup Cron Job for system cleanup..."
+cat > /etc/cron.d/system-cleanup << 'EOF'
+7 7 * * 0 root apt-get autoremove -y && apt-get clean && (command -v docker >/dev/null && docker image prune -af && docker container prune -f || true) >/dev/null 2>&1
+EOF
+chmod 644 /etc/cron.d/system-cleanup
+systemctl restart cron 2>/dev/null || systemctl restart crond 2>/dev/null || true
+
+# =========================
+# 📡 IP 获取与精准分流
 # =========================
 echo "📡 Detect IP..."
 
+# 提前确保工具有效，这里直接用刚刚装好的 curl
 IPV4=$(curl -4 -s --max-time 3 https://api.ipify.org \
     || curl -4 -s --max-time 3 https://ifconfig.me \
     || echo "无")
@@ -103,14 +172,18 @@ IPV6=$(curl -6 -s --max-time 3 https://api.ipify.org \
     || curl -6 -s --max-time 3 https://ifconfig.me \
     || echo "无")
 
-# 双栈默认 IPv4 优先
+# 采用你优化后的精准 IP 选择逻辑，规避“无”字中规造成的 Bug
 if [ "$NET_MODE" = "4" ]; then
     MAIN_IP=$IPV4
 else
-    MAIN_IP=${IPV4:-$IPV6}
+    if [ "$IPV4" != "无" ]; then
+        MAIN_IP="$IPV4"
+    else
+        MAIN_IP="$IPV6"
+    fi
 fi
 
-curl -4 -s --max-time 3 https://ip.sb || true
+curl -4 -s --max-time 3 https://ip.sb >/dev/null || true
 
 # =========================
 # 清理旧环境
@@ -122,7 +195,7 @@ if [ -d "/root/snelldocker" ]; then
 fi
 
 # =========================
-# Docker
+# Docker 检查与安装
 # =========================
 echo "🐳 Checking Docker..."
 
@@ -131,13 +204,10 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 # =========================
-# 目录
+# 目录与配置生成
 # =========================
 mkdir -p /root/snelldocker/snell-conf
 
-# =========================
-# docker-compose
-# =========================
 cat > /root/snelldocker/docker-compose.yml << 'EOF'
 services:
   snell:
@@ -151,9 +221,6 @@ services:
       - SNELL_URL=https://dl.nssurge.com/snell/snell-server-v5.0.1-linux-amd64.zip
 EOF
 
-# =========================
-# snell config
-# =========================
 cat > /root/snelldocker/snell-conf/snell.conf << EOF
 [snell-server]
 listen = ${LISTEN_ADDR}:${SNELL_PORT}
@@ -165,17 +232,16 @@ sed -i 's/\r//g' /root/snelldocker/snell-conf/snell.conf
 sed -i 's/\r//g' /root/snelldocker/docker-compose.yml
 
 # =========================
-# 启动
+# 🚀 容器启动
 # =========================
-echo "🚀 Starting..."
+echo "🚀 Starting Snell Container..."
 
 cd /root/snelldocker
-
 docker compose pull || true
 docker compose up -d --force-recreate || true
 
 # =========================
-# 输出
+# 🎉 报告输出
 # =========================
 echo ""
 echo "=============================="
@@ -189,9 +255,12 @@ echo " Mode     : $([ "$NET_MODE" = "4" ] && echo "IPv4 Only" || echo "Dual Stac
 echo " Timezone : Asia/Shanghai"
 echo " BBR      : enabled"
 echo " TFO      : enabled"
+echo " Firewall : UFW Enabled (Ports: $SSH_PORT, 80, 443, $SNELL_PORT)"
+echo " Fail2ban : Enabled (3 retries / 7h ban)"
+echo " Cleanup  : Every Sunday 07:07 (Aggressive Prune)"
 echo "=============================="
 
 echo ""
-echo "Surge:"
+echo "Surge 配置条目:"
 echo "Snell_${SNELL_PORT} = snell, ${MAIN_IP}, ${SNELL_PORT}, psk=${SNELL_PSK}, version=5, tfo=true, reuse=true, ecn=true"
 echo "=============================="
