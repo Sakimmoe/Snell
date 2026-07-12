@@ -15,31 +15,25 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-# ==================== 1. 自动修复 Debian 11 软件源 ====================
+# 1. 自动修复 Debian 11 软件源
 echo "-> 检查并修复 APT 软件源..."
 if [ -f /etc/os-release ]; then
     . /etc/os-release
     CODENAME="${VERSION_CODENAME:-}"
-else
-    CODENAME=""
 fi
 
 if [ "$CODENAME" = "bullseye" ]; then
-    echo "检测到 Debian 11 (Bullseye)，正在修复软件源..."
     cat > /etc/apt/sources.list << 'EOF'
 deb http://archive.debian.org/debian bullseye main contrib non-free
 deb http://archive.debian.org/debian bullseye-updates main contrib non-free
 EOF
     rm -f /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
 fi
-
 apt-get update -qq || true
 
-# ==================== 2. 系统优化 ====================
+# 2. 系统优化
 echo "🌐 Setting IPv4 priority..."
-if ! grep -q "precedence ::ffff:0:0/96 100" /etc/gai.conf 2>/dev/null; then
-    echo "precedence ::ffff:0:0/96 100" >> /etc/gai.conf
-fi
+grep -q "precedence ::ffff:0:0/96 100" /etc/gai.conf 2>/dev/null || echo "precedence ::ffff:0:0/96 100" >> /etc/gai.conf
 
 echo "🌐 Config DNS..."
 if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
@@ -66,7 +60,7 @@ EOF
 fi
 sysctl --system >/dev/null || true
 
-# ==================== 3. IP 获取 ====================
+# 3. IP 获取
 echo "📡 Detect IP..."
 IPV4=$(curl -4 -s --max-time 5 https://api.ipify.org || curl -4 -s --max-time 5 https://ifconfig.me || echo "无")
 IPV6=$(curl -6 -s --max-time 5 https://api.ipify.org || curl -6 -s --max-time 5 https://ifconfig.me || echo "无")
@@ -80,7 +74,7 @@ else
     ENABLE_IPV6="true"
 fi
 
-# ==================== 4. 部署 Snell ====================
+# 4. 部署 Snell（使用 latest）
 if [ -d "/root/snelldocker" ]; then
     (cd /root/snelldocker && docker compose down) || true
     rm -rf /root/snelldocker
@@ -126,7 +120,7 @@ docker compose up -d --force-recreate
 
 echo "✅ Snell 容器已启动"
 
-# ==================== 5. ufw + fail2ban + 每周清理 ====================
+# 5. ufw + fail2ban + 每周清理
 echo ""
 echo "🛡️ 配置 ufw + fail2ban + 每周日 07:07 清理..."
 
@@ -137,7 +131,6 @@ if command -v sshd >/dev/null 2>&1; then
     DETECTED=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}' || true)
     [ -n "$DETECTED" ] && SSH_PORT=$DETECTED
 fi
-echo "检测到 SSH 端口: $SSH_PORT"
 
 ufw default deny incoming 2>/dev/null || true
 ufw default allow outgoing 2>/dev/null || true
@@ -177,7 +170,7 @@ systemctl reload cron 2>/dev/null || true
 
 echo "✅ ufw + fail2ban + 每周清理配置完成"
 
-# ==================== 最终输出 ====================
+# 最终输出
 echo ""
 echo "=============================="
 echo " Snell 部署完成"
