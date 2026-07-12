@@ -7,7 +7,7 @@ SNELL_PSK=${2:-kokonoeyukari}
 NET_MODE=${3:-}
 
 echo "=============================="
-echo " Snell 一体化部署脚本（固定镜像版）"
+echo " Snell 一体化部署脚本（稳定版）"
 echo "=============================="
 
 if [ "$EUID" -ne 0 ]; then
@@ -80,7 +80,7 @@ else
     ENABLE_IPV6="true"
 fi
 
-# ==================== 4. 部署 Snell（使用固定版本镜像） ====================
+# ==================== 4. 部署 Snell ====================
 if [ -d "/root/snelldocker" ]; then
     (cd /root/snelldocker && docker compose down) || true
     rm -rf /root/snelldocker
@@ -99,7 +99,7 @@ mkdir -p /root/snelldocker/snell-conf
 cat > /root/snelldocker/docker-compose.yml << 'EOF'
 services:
   snell:
-    image: accors/snell:v5.0.1
+    image: accors/snell:latest
     container_name: snell
     restart: always
     network_mode: host
