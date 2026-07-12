@@ -81,12 +81,14 @@ apt-get install -y ufw fail2ban 2>/dev/null || true
 echo "🔥 Configuring ufw firewall..."
 
 # 自动检测当前 SSH 端口，防止改端口后把自己锁外面
-SSH_PORT=22
-if command -v sshd >/dev/null 2>&1; then
-    DETECTED_PORT=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}')
-    if [ -n "$DETECTED_PORT" ]; then
-        SSH_PORT=$DETECTED_PORT
-    fi
+SSH_PORT=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}' || true)
+
+if [ -z "$SSH_PORT" ]; then
+    SSH_PORT=$(grep -E "^Port " /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | tail -1 || true)
+fi
+
+if [ -z "$SSH_PORT" ]; then
+    SSH_PORT=22
 fi
 
 ufw default deny incoming 2>/dev/null || true
