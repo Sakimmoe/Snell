@@ -6,7 +6,7 @@ SNELL_PSK=${2:-kokonoeyukari}
 NET_MODE=${3:-}
 
 echo "=============================="
-echo " Snell Auto Deploy Script (Fixed)"
+echo " Snell Auto Deploy Script (Optimized)"
 echo "=============================="
 
 if [ "$EUID" -ne 0 ]; then
@@ -14,7 +14,7 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-# IPv4 priority
+# IPv4 优先
 echo "🌐 Setting IPv4 priority..."
 GAI_CONF="/etc/gai.conf"
 RULE="precedence ::ffff:0:0/96 100"
@@ -22,7 +22,7 @@ touch "$GAI_CONF"
 sed -i '/::ffff:0:0\/96/d' "$GAI_CONF" 2>/dev/null || true
 grep -q "::ffff:0:0/96" "$GAI_CONF" || echo "$RULE" >> "$GAI_CONF"
 
-# Network mode
+# 网络模式
 if [ "$NET_MODE" = "4" ]; then
     LISTEN_ADDR="0.0.0.0"
     ENABLE_IPV6="false"
@@ -44,7 +44,7 @@ nameserver 2606:4700:4700::1111
 nameserver 2001:4860:4860::8888
 EOF
 
-# Timezone
+# 时区
 echo "🕒 Setting timezone to Asia/Shanghai..."
 if command -v timedatectl >/dev/null 2>&1; then
     timedatectl set-timezone Asia/Shanghai || true
@@ -66,43 +66,6 @@ EOF
 fi
 sysctl --system >/dev/null || true
 
-# =========================
-# 🛡️ 防火墙 (ufw) - 改进版：先配置规则，最后再 enable
-# =========================
-echo "🛡️ Installing and configuring firewall + fail2ban..."
-apt-get update -qq 2>/dev/null || true
-apt-get install -y ufw fail2ban 2>/dev/null || true
-
-echo "🔥 Configuring ufw firewall (rules only, enable at the end)..."
-SSH_PORT=22
-if [ -x /usr/sbin/sshd ]; then
-    DETECTED_PORT=$(/usr/sbin/sshd -T 2>/dev/null | awk '/^port /{print $2; exit}')
-    if [ -n "$DETECTED_PORT" ]; then
-        SSH_PORT=$DETECTED_PORT
-    fi
-fi
-echo "Detected SSH port: ${SSH_PORT}"
-
-ufw default deny incoming 2>/dev/null || true
-ufw default allow outgoing 2>/dev/null || true
-ufw allow ${SSH_PORT}/tcp 2>/dev/null || true
-ufw allow ${SNELL_PORT}/tcp 2>/dev/null || true
-ufw allow ${SNELL_PORT}/udp 2>/dev/null || true
-
-# fail2ban 配置
-echo "🚫 Configuring fail2ban (maxretry=3, bantime=7h)..."
-mkdir -p /etc/fail2ban/jail.d 2>/dev/null || true
-cat > /etc/fail2ban/jail.d/ssh.conf << 'JAILEOF'
-[sshd]
-enabled = true
-backend = systemd
-maxretry = 3
-bantime = 7h
-findtime = 10m
-JAILEOF
-systemctl enable fail2ban 2>/dev/null || true
-systemctl restart fail2ban 2>/dev/null || true
-
 # IP 获取
 echo "📡 Detect IP..."
 IPV4=$(curl -4 -s --max-time 5 https://api.ipify.org || curl -4 -s --max-time 5 https://ifconfig.me || echo "无")
@@ -111,11 +74,7 @@ IPV6=$(curl -6 -s --max-time 5 https://api.ipify.org || curl -6 -s --max-time 5 
 if [ "$NET_MODE" = "4" ]; then
     MAIN_IP=$IPV4
 else
-    if [ "$IPV4" != "无" ]; then
-        MAIN_IP=$IPV4
-    else
-        MAIN_IP=$IPV6
-    fi
+    MAIN_IP=${IPV4:-$IPV6}
 fi
 
 # 清理旧环境
@@ -130,10 +89,9 @@ echo "🐳 Checking Docker..."
 if ! command -v docker >/dev/null 2>&1; then
     curl -fsSL https://get.docker.com | bash
 fi
-if ! docker compose version >/dev/null 2>&1; then
+if ! docker compose version >/dev/null 2>/dev/null; then
     apt-get install -y docker-compose-plugin
 fi
-docker compose version >/dev/null 2>&1
 
 # 目录
 mkdir -p /root/snelldocker/snell-conf
@@ -152,29 +110,71 @@ services:
       - SNELL_URL=https://dl.nssurge.com/snell/snell-server-v5.0.1-linux-amd64.zip
 EOF
 
-# snell config
+# snell 配置
 cat > /root/snelldocker/snell-conf/snell.conf << EOF
 [snell-server]
 listen = ${LISTEN_ADDR}:${SNELL_PORT}
 psk = ${SNELL_PSK}
 ipv6 = ${ENABLE_IPV6}
 EOF
+
 sed -i 's/\r//g' /root/snelldocker/snell-conf/snell.conf
 sed -i 's/\r//g' /root/snelldocker/docker-compose.yml
 
 # 启动 Snell
 echo "🚀 Starting Snell..."
 cd /root/snelldocker
-docker compose pull
-docker compose up -d --force-recreate
+docker compose pull || true
+docker compose up -d --force-recreate || true
 
-# 最后再 enable ufw（此时服务已启动，风险最低）
-echo "🔥 Enabling ufw firewall..."
+# =========================
+# 🛡️ 防火墙 + fail2ban（移到最后执行，降低断连风险）
+# =========================
+echo "🛡️ Configuring firewall (ufw) + fail2ban..."
+
+apt-get update -qq 2>/dev/null || true
+apt-get install -y ufw fail2ban 2>/dev/null || true
+
+# 检测 SSH 端口
+SSH_PORT=22
+if [ -x /usr/sbin/sshd ]; then
+    DETECTED_PORT=$(/usr/sbin/sshd -T 2>/dev/null | awk '/^port /{print $2; exit}')
+    [ -n "$DETECTED_PORT" ] && SSH_PORT=$DETECTED_PORT
+fi
+echo "Detected SSH port: ${SSH_PORT}"
+
+# 先添加规则（不立即生效）
+ufw default deny incoming 2>/dev/null || true
+ufw default allow outgoing 2>/dev/null || true
+ufw allow ${SSH_PORT}/tcp 2>/dev/null || true
+ufw allow ${SNELL_PORT}/tcp 2>/dev/null || true
+ufw allow ${SNELL_PORT}/udp 2>/dev/null || true
+
+# fail2ban 配置
+echo "🚫 Configuring fail2ban..."
+mkdir -p /etc/fail2ban/jail.d
+cat > /etc/fail2ban/jail.d/ssh.conf << 'JAILEOF'
+[sshd]
+enabled = true
+backend = systemd
+maxretry = 3
+bantime = 7h
+findtime = 10m
+JAILEOF
+
+systemctl enable fail2ban 2>/dev/null || true
+systemctl restart fail2ban 2>/dev/null || true
+
+# 最后再启用 ufw
+echo "🔥 Enabling ufw..."
 ufw --force enable 2>/dev/null || true
 
-# 每周清理 cron
-echo "🧹 Setting up weekly cleanup..."
+# =========================
+# 🧹 每周日 07:07（上海时间）清理
+# =========================
+echo "🧹 Setting up weekly cleanup cron..."
 cat > /etc/cron.d/snell-cleanup << 'CRONEOF'
+# Weekly cleanup every Sunday 07:07 Asia/Shanghai
 7 7 * * 0 root /bin/bash -c '
   echo "[$(date \"+%F %T\")] Starting weekly cleanup..." >> /var/log/snell-cleanup.log 2>/dev/null || true
   docker system prune -af --volumes 2>/dev/null || true
@@ -189,7 +189,9 @@ CRONEOF
 chmod 644 /etc/cron.d/snell-cleanup 2>/dev/null || true
 systemctl reload cron 2>/dev/null || true
 
+# =========================
 # 输出信息
+# =========================
 echo ""
 echo "=============================="
 echo " Snell Info"
@@ -202,11 +204,12 @@ echo " Mode : $([ "$NET_MODE" = "4" ] && echo "IPv4 Only" || echo "Dual Stack")"
 echo " Timezone : Asia/Shanghai"
 echo " BBR : enabled"
 echo " TFO : enabled"
+echo " Fail2ban : enabled (maxretry=3, bantime=7h)"
+echo " Weekly Cleanup : Sunday 07:07 (Asia/Shanghai)"
 echo "=============================="
 echo ""
 echo "Surge:"
 echo "Snell_${SNELL_PORT} = snell, ${MAIN_IP}, ${SNELL_PORT}, psk=${SNELL_PSK}, version=5, tfo=true, reuse=true, ecn=true"
 echo "=============================="
 echo ""
-echo "✅ Deployment finished!"
-echo "If your SSH dropped during ufw enable, just reconnect."
+echo "✅ Deployment completed!"
