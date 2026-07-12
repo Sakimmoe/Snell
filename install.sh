@@ -8,7 +8,7 @@ SNELL_PSK=${2:-kokonoeyukari}
 NET_MODE=${3:-}
 
 echo "=============================="
-echo " Snell Auto Deploy "
+echo " Snell Auto Deploy Script v9 (Final - Proper Order)"
 echo "=============================="
 
 if [ "$EUID" -ne 0 ]; then
@@ -17,12 +17,36 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # =========================
-# 🔧 Bullseye 源检测（仅在需要时切换 archive）
+# 1. DNS 配置（最优先，尽早执行）
+# =========================
+echo "🌐 Configuring DNS (earliest possible)..."
+
+if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+    systemctl disable systemd-resolved --now 2>/dev/null || true
+fi
+
+if [ -L /etc/resolv.conf ]; then
+    rm -f /etc/resolv.conf
+fi
+chattr -i /etc/resolv.conf 2>/dev/null || true
+
+cat > /etc/resolv.conf << EOF
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+nameserver 2606:4700:4700::1111
+nameserver 2001:4860:4860::8888
+EOF
+
+echo "✅ DNS configured"
+
+# =========================
+# 2. Bullseye 源检测（此时 DNS 已修复）
 # =========================
 echo "🔧 Checking APT sources..."
 
-if [ ! -f /etc/apt/sources.list.bak ]; then
-    cp /etc/apt/sources.list /etc/apt/sources.list.bak 2>/dev/null || true
+# 更安全的备份逻辑（只在传统 sources.list 存在时备份）
+if [ -f /etc/apt/sources.list ] && [ ! -f /etc/apt/sources.list.bak ]; then
+    cp /etc/apt/sources.list /etc/apt/sources.list.bak
 fi
 
 if command -v lsb_release >/dev/null 2>&1; then
@@ -62,30 +86,7 @@ EOF
 fi
 
 # =========================
-# 🌐 DNS 配置（提前到所有 apt 操作之前）
-# =========================
-echo "🌐 Configuring DNS (early)..."
-
-if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
-    systemctl disable systemd-resolved --now 2>/dev/null || true
-fi
-
-if [ -L /etc/resolv.conf ]; then
-    rm -f /etc/resolv.conf
-fi
-chattr -i /etc/resolv.conf 2>/dev/null || true
-
-cat > /etc/resolv.conf << EOF
-nameserver 1.1.1.1
-nameserver 8.8.8.8
-nameserver 2606:4700:4700::1111
-nameserver 2001:4860:4860::8888
-EOF
-
-echo "✅ DNS configured"
-
-# =========================
-# 📦 更新索引 + 安装基础依赖
+# 3. 更新索引 + 安装基础依赖
 # =========================
 echo "🔄 Updating package index..."
 apt-get update
@@ -195,7 +196,7 @@ fi
 
 if [ "$MAIN_IP" = "无" ]; then
     MAIN_IP="<SERVER_IP>"
-    echo "⚠️ Failed to auto-detect public IP. Please replace <SERVER_IP> manually in Surge config."
+    echo "⚠️ Failed to auto-detect public IP. Please replace <SERVER_IP> manually."
 fi
 
 # =========================
