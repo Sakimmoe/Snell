@@ -81,7 +81,7 @@ timedatectl set-timezone Asia/Shanghai 2>/dev/null || true
 
 echo "⚡ Enable BBR & TFO..."
 
-cat > /etc/sysctl.d/99-network-opt.conf << EOF
+cat > /etc/sysctl.d/99-network-opt.conf << 'EOF'
 net.core.default_qdisc=fq
 net.ipv4.tcp_congestion_control=bbr
 net.ipv4.tcp_fastopen=3
