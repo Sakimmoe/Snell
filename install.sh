@@ -80,13 +80,13 @@ echo "🕒 Setting timezone to Asia/Shanghai..."
 timedatectl set-timezone Asia/Shanghai 2>/dev/null || true
 
 echo "⚡ Enable BBR & TFO..."
-sysctl -w net.ipv4.tcp_fastopen=3 >/dev/null || true
-if [ ! -f /etc/sysctl.d/99-bbr.conf ]; then
-cat > /etc/sysctl.d/99-bbr.conf << EOF
+
+cat > /etc/sysctl.d/99-network-opt.conf << EOF
 net.core.default_qdisc=fq
 net.ipv4.tcp_congestion_control=bbr
+net.ipv4.tcp_fastopen=3
 EOF
-fi
+
 sysctl --system >/dev/null || true
 
 # 3. IP 获取
