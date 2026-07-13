@@ -15,35 +15,35 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-# ==================== Docker 镜像加速器配置（核心新增） ====================
+# ==================== Docker 镜像加速器配置（改进版） ====================
 configure_docker_registry_mirrors() {
     local daemon_file="/etc/docker/daemon.json"
 
-    # 2026 年推荐的稳定镜像源（长期维护用）
-    # 如未来某个源失效，只需修改下面这个数组即可
-    local recommended_mirrors='[
-        "https://docker.1ms.run",
-        "https://docker.xuanyuan.me",
-        "https://docker.m.daocloud.io",
-        "https://docker-0.unsee.tech"
-    ]'
+    echo "🌐 配置 Docker 镜像加速器..."
 
-    if [ ! -f "$daemon_file" ]; then
-        echo "🌐 配置 Docker 镜像加速器（解决 Docker Hub 429 限流）..."
-        mkdir -p /etc/docker
-        cat > "$daemon_file" << EOF
+    mkdir -p /etc/docker
+
+    # 如果已存在则备份
+    if [ -f "$daemon_file" ]; then
+        cp "$daemon_file" "${daemon_file}.bak.$(date +%s)"
+    fi
+
+    cat > "$daemon_file" << 'EOF'
 {
-  "registry-mirrors": $recommended_mirrors,
+  "registry-mirrors": [
+    "https://docker.m.daocloud.io",
+    "https://docker.1ms.run",
+    "https://dockerproxy.com"
+  ],
   "live-restore": true
 }
 EOF
-        echo "   已配置推荐镜像源，正在重启 Docker..."
-        systemctl restart docker
-        sleep 3
-    else
-        echo "🌐 检测到已存在 /etc/docker/daemon.json，跳过自动配置"
-        echo "   如需更好加速效果，可手动在该文件添加 registry-mirrors"
-    fi
+
+    systemctl daemon-reload
+    systemctl restart docker
+    sleep 5
+
+    echo "✅ Docker 镜像加速器配置完成"
 }
 # ======================================================================
 
@@ -62,7 +62,7 @@ EOF
 fi
 apt-get update -qq || true
 
-# 2. 系统优化（保持原样）
+# 2. 系统优化
 echo "🌐 Setting IPv4 priority..."
 grep -q "precedence ::ffff:0:0/96 100" /etc/gai.conf 2>/dev/null || echo "precedence ::ffff:0:0/96 100" >> /etc/gai.conf
 
@@ -91,7 +91,7 @@ EOF
 fi
 sysctl --system >/dev/null || true
 
-# 3. IP 获取（保持原样）
+# 3. IP 获取
 echo "📡 Detect IP..."
 IPV4=$(curl -4 -s --max-time 5 https://api.ipify.org || curl -4 -s --max-time 5 https://ifconfig.me || echo "无")
 IPV6=$(curl -6 -s --max-time 5 https://api.ipify.org || curl -6 -s --max-time 5 https://ifconfig.me || echo "无")
@@ -120,9 +120,8 @@ if ! docker compose version >/dev/null 2>&1; then
     apt-get install -y docker-compose-plugin
 fi
 
-# ==================== 在这里调用镜像加速配置 ====================
+# 调用镜像加速器配置
 configure_docker_registry_mirrors
-# ============================================================
 
 mkdir -p /root/snelldocker/snell-conf
 
@@ -151,12 +150,25 @@ sed -i 's/\r//g' /root/snelldocker/docker-compose.yml
 
 echo "🚀 Starting Snell..."
 cd /root/snelldocker
+
+# 先尝试正常拉取，失败则使用备用代理源
+if ! docker pull accors/snell:latest; then
+    echo "⚠️  镜像加速器拉取失败，尝试备用代理源..."
+    if docker pull dockerproxy.com/accors/snell:latest; then
+        docker tag dockerproxy.com/accors/snell:latest accors/snell:latest
+        echo "✅ 已通过备用源拉取并打标签"
+    else
+        echo "❌ 所有拉取方式均失败，请检查网络后重试"
+        exit 1
+    fi
+fi
+
 docker compose pull
 docker compose up -d --force-recreate
 
 echo "✅ Snell 容器已启动"
 
-# 5. ufw + fail2ban + 每周清理（保持原样）
+# 5. ufw + fail2ban + 每周清理
 echo ""
 echo "🛡️ 配置 ufw + fail2ban + 每周日 07:07 清理..."
 apt-get install -y ufw fail2ban 2>/dev/null || true
