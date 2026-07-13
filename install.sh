@@ -46,7 +46,7 @@ EOF
 }
 # ======================================================================
 
-# 1. 自动修复 Debian 11 软件源（已简化）
+# 1. 自动修复 Debian 11 软件源
 echo "-> 检查并修复 APT 软件源..."
 if [ -f /etc/os-release ]; then
     . /etc/os-release
@@ -89,10 +89,10 @@ EOF
 fi
 sysctl --system >/dev/null || true
 
-# 3. IP 获取
+# 3. IP 获取（已优化 IPv6 检测）
 echo "📡 Detect IP..."
 IPV4=$(curl -4 -s --max-time 5 https://api.ipify.org || curl -4 -s --max-time 5 https://ifconfig.me || echo "无")
-IPV6=$(curl -6 -s --max-time 5 https://api.ipify.org || curl -6 -s --max-time 5 https://ifconfig.me || echo "无")
+IPV6=$(curl -6 -s --connect-timeout 3 https://api64.ipify.org || echo "无")
 MAIN_IP=${IPV4:-$IPV6}
 
 if [ "$NET_MODE" = "4" ]; then
@@ -148,14 +148,17 @@ sed -i 's/\r//g' /root/snelldocker/docker-compose.yml
 echo "🚀 Starting Snell..."
 cd /root/snelldocker
 
-# 拉取镜像（带 fallback）
+# 拉取镜像（带 fallback，防止 set -e 直接退出）
 if ! docker pull accors/snell:latest; then
     echo "⚠️  Docker Hub 拉取失败，尝试备用源..."
-    docker pull dockerproxy.com/accors/snell:latest
-    docker tag dockerproxy.com/accors/snell:latest accors/snell:latest
+    if docker pull dockerproxy.com/accors/snell:latest; then
+        docker tag dockerproxy.com/accors/snell:latest accors/snell:latest
+    else
+        echo "❌ Snell 镜像拉取失败"
+        exit 1
+    fi
 fi
 
-# 直接使用已拉取的镜像启动（不再执行 docker compose pull）
 docker compose up -d --force-recreate
 
 echo "✅ Snell 容器已启动"
