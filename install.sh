@@ -89,18 +89,23 @@ EOF
 fi
 sysctl --system >/dev/null || true
 
-# 3. IP 获取（已优化 IPv6 检测）
+# 3. IP 获取
 echo "📡 Detect IP..."
 IPV4=$(curl -4 -s --max-time 5 https://api.ipify.org || curl -4 -s --max-time 5 https://ifconfig.me || echo "无")
 IPV6=$(curl -6 -s --connect-timeout 3 https://api64.ipify.org || echo "无")
 MAIN_IP=${IPV4:-$IPV6}
 
+# 网络模式判断 + IPv6 可用性检测
 if [ "$NET_MODE" = "4" ]; then
     LISTEN_ADDR="0.0.0.0"
     ENABLE_IPV6="false"
 else
     LISTEN_ADDR="::"
-    ENABLE_IPV6="true"
+    if [ "$IPV6" != "无" ]; then
+        ENABLE_IPV6="true"
+    else
+        ENABLE_IPV6="false"
+    fi
 fi
 
 # 4. 部署 Snell
@@ -148,7 +153,7 @@ sed -i 's/\r//g' /root/snelldocker/docker-compose.yml
 echo "🚀 Starting Snell..."
 cd /root/snelldocker
 
-# 拉取镜像（带 fallback，防止 set -e 直接退出）
+# 拉取镜像（带 fallback）
 if ! docker pull accors/snell:latest; then
     echo "⚠️  Docker Hub 拉取失败，尝试备用源..."
     if docker pull dockerproxy.com/accors/snell:latest; then
