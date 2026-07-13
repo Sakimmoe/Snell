@@ -15,7 +15,7 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-# ==================== Docker 镜像加速器配置（改进版） ====================
+# ==================== Docker 镜像加速器配置 ====================
 configure_docker_registry_mirrors() {
     local daemon_file="/etc/docker/daemon.json"
 
@@ -23,7 +23,6 @@ configure_docker_registry_mirrors() {
 
     mkdir -p /etc/docker
 
-    # 如果已存在则备份
     if [ -f "$daemon_file" ]; then
         cp "$daemon_file" "${daemon_file}.bak.$(date +%s)"
     fi
@@ -47,7 +46,7 @@ EOF
 }
 # ======================================================================
 
-# 1. 自动修复 Debian 11 软件源
+# 1. 自动修复 Debian 11 软件源（已简化）
 echo "-> 检查并修复 APT 软件源..."
 if [ -f /etc/os-release ]; then
     . /etc/os-release
@@ -56,7 +55,6 @@ fi
 if [ "$CODENAME" = "bullseye" ]; then
     cat > /etc/apt/sources.list << 'EOF'
 deb http://archive.debian.org/debian bullseye main contrib non-free
-deb http://archive.debian.org/debian bullseye-updates main contrib non-free
 EOF
     rm -f /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
 fi
@@ -120,7 +118,6 @@ if ! docker compose version >/dev/null 2>&1; then
     apt-get install -y docker-compose-plugin
 fi
 
-# 调用镜像加速器配置
 configure_docker_registry_mirrors
 
 mkdir -p /root/snelldocker/snell-conf
@@ -151,19 +148,14 @@ sed -i 's/\r//g' /root/snelldocker/docker-compose.yml
 echo "🚀 Starting Snell..."
 cd /root/snelldocker
 
-# 先尝试正常拉取，失败则使用备用代理源
+# 拉取镜像（带 fallback）
 if ! docker pull accors/snell:latest; then
-    echo "⚠️  镜像加速器拉取失败，尝试备用代理源..."
-    if docker pull dockerproxy.com/accors/snell:latest; then
-        docker tag dockerproxy.com/accors/snell:latest accors/snell:latest
-        echo "✅ 已通过备用源拉取并打标签"
-    else
-        echo "❌ 所有拉取方式均失败，请检查网络后重试"
-        exit 1
-    fi
+    echo "⚠️  Docker Hub 拉取失败，尝试备用源..."
+    docker pull dockerproxy.com/accors/snell:latest
+    docker tag dockerproxy.com/accors/snell:latest accors/snell:latest
 fi
 
-docker compose pull
+# 直接使用已拉取的镜像启动（不再执行 docker compose pull）
 docker compose up -d --force-recreate
 
 echo "✅ Snell 容器已启动"
