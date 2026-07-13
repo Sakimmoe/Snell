@@ -15,13 +15,44 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
+# ==================== Docker 镜像加速器配置（核心新增） ====================
+configure_docker_registry_mirrors() {
+    local daemon_file="/etc/docker/daemon.json"
+
+    # 2026 年推荐的稳定镜像源（长期维护用）
+    # 如未来某个源失效，只需修改下面这个数组即可
+    local recommended_mirrors='[
+        "https://docker.1ms.run",
+        "https://docker.xuanyuan.me",
+        "https://docker.m.daocloud.io",
+        "https://docker-0.unsee.tech"
+    ]'
+
+    if [ ! -f "$daemon_file" ]; then
+        echo "🌐 配置 Docker 镜像加速器（解决 Docker Hub 429 限流）..."
+        mkdir -p /etc/docker
+        cat > "$daemon_file" << EOF
+{
+  "registry-mirrors": $recommended_mirrors,
+  "live-restore": true
+}
+EOF
+        echo "   已配置推荐镜像源，正在重启 Docker..."
+        systemctl restart docker
+        sleep 3
+    else
+        echo "🌐 检测到已存在 /etc/docker/daemon.json，跳过自动配置"
+        echo "   如需更好加速效果，可手动在该文件添加 registry-mirrors"
+    fi
+}
+# ======================================================================
+
 # 1. 自动修复 Debian 11 软件源
 echo "-> 检查并修复 APT 软件源..."
 if [ -f /etc/os-release ]; then
     . /etc/os-release
     CODENAME="${VERSION_CODENAME:-}"
 fi
-
 if [ "$CODENAME" = "bullseye" ]; then
     cat > /etc/apt/sources.list << 'EOF'
 deb http://archive.debian.org/debian bullseye main contrib non-free
@@ -31,7 +62,7 @@ EOF
 fi
 apt-get update -qq || true
 
-# 2. 系统优化
+# 2. 系统优化（保持原样）
 echo "🌐 Setting IPv4 priority..."
 grep -q "precedence ::ffff:0:0/96 100" /etc/gai.conf 2>/dev/null || echo "precedence ::ffff:0:0/96 100" >> /etc/gai.conf
 
@@ -60,7 +91,7 @@ EOF
 fi
 sysctl --system >/dev/null || true
 
-# 3. IP 获取
+# 3. IP 获取（保持原样）
 echo "📡 Detect IP..."
 IPV4=$(curl -4 -s --max-time 5 https://api.ipify.org || curl -4 -s --max-time 5 https://ifconfig.me || echo "无")
 IPV6=$(curl -6 -s --max-time 5 https://api.ipify.org || curl -6 -s --max-time 5 https://ifconfig.me || echo "无")
@@ -74,7 +105,7 @@ else
     ENABLE_IPV6="true"
 fi
 
-# 4. 部署 Snell（使用 latest）
+# 4. 部署 Snell
 if [ -d "/root/snelldocker" ]; then
     (cd /root/snelldocker && docker compose down) || true
     rm -rf /root/snelldocker
@@ -84,9 +115,14 @@ echo "🐳 Checking Docker..."
 if ! command -v docker >/dev/null 2>&1; then
     curl -fsSL https://get.docker.com | bash
 fi
+
 if ! docker compose version >/dev/null 2>&1; then
     apt-get install -y docker-compose-plugin
 fi
+
+# ==================== 在这里调用镜像加速配置 ====================
+configure_docker_registry_mirrors
+# ============================================================
 
 mkdir -p /root/snelldocker/snell-conf
 
@@ -120,10 +156,9 @@ docker compose up -d --force-recreate
 
 echo "✅ Snell 容器已启动"
 
-# 5. ufw + fail2ban + 每周清理
+# 5. ufw + fail2ban + 每周清理（保持原样）
 echo ""
 echo "🛡️ 配置 ufw + fail2ban + 每周日 07:07 清理..."
-
 apt-get install -y ufw fail2ban 2>/dev/null || true
 
 SSH_PORT=22
@@ -165,6 +200,7 @@ cat > /etc/cron.d/snell-cleanup << 'CRONEOF'
   echo "[$(date \"+%F %T\")] Weekly cleanup completed." >> /var/log/snell-cleanup.log 2>/dev/null || true
 '
 CRONEOF
+
 chmod 644 /etc/cron.d/snell-cleanup 2>/dev/null || true
 systemctl reload cron 2>/dev/null || true
 
