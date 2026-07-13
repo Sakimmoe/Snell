@@ -30,9 +30,9 @@ configure_docker_registry_mirrors() {
     cat > "$daemon_file" << 'EOF'
 {
   "registry-mirrors": [
-    "https://docker.m.daocloud.io",
+    "https://docker.xuanyuan.me",
     "https://docker.1ms.run",
-    "https://dockerproxy.com"
+    "https://docker.m.daocloud.io"
   ],
   "live-restore": true
 }
