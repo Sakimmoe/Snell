@@ -9,14 +9,14 @@
 在服务器终端运行以下命令，并在末尾依次填写端口、密码和模式：
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/Sakimmoe/Snell-Docker/main/install.sh) 端口 密码 模式
+bash <(curl -sL https://raw.githubusercontent.com/Sakimmoe/Snell/main/install.sh) 端口 密码 模式
 ```
 不填写端口密码模式的话默认开启双栈，端口为26216 密码为kokonoeyukari
 
 ### 示例（IPv4 + IPv6 双栈）
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/Sakimmoe/Snell-Docker/main/install.sh) 26216 kokonoeyukari
+bash <(curl -sL https://raw.githubusercontent.com/Sakimmoe/Snell/main/install.sh) 26216 kokonoeyukari
 ```
 
 ### 参数说明
