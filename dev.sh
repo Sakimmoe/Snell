@@ -125,7 +125,8 @@ fi
 
 # 6. 配置 UFW
 echo "🛡️ 配置防火墙 (UFW)..."
-SSH_PORT=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}' || echo "22")
+SSH_PORT=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}')
+[ -z "$SSH_PORT" ] && SSH_PORT=22
 ufw default deny incoming >/dev/null 2>&1
 ufw default allow outgoing >/dev/null 2>&1
 ufw allow ${SSH_PORT}/tcp comment 'SSH' >/dev/null 2>&1
