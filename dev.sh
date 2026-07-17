@@ -19,7 +19,10 @@ apt-get update -qq || true
 apt-get install -y -qq wget unzip curl ufw iproute2 e2fsprogs cron >/dev/null 2>&1
 
 # 2. 修复 Debian 11 源 (仅限 Bullseye)
-if grep -q "bullseye" /etc/os-release 2>/dev/null; then
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+fi
+if [ "${VERSION_CODENAME:-}" = "bullseye" ]; then
     echo "-> 修复 Debian 11 软件源..."
     cat > /etc/apt/sources.list << 'EOF'
 deb http://archive.debian.org/debian bullseye main contrib non-free
@@ -64,6 +67,9 @@ else
 fi
 
 # 5. 部署 Snell
+systemctl stop snell 2>/dev/null || true
+sleep 1 # 等待端口彻底释放
+
 if ss -tlnp | grep -q ":${SNELL_PORT} "; then
     echo "❌ 端口 ${SNELL_PORT} 已被占用:" && ss -tlnp | grep ":${SNELL_PORT} " && exit 1
 fi
@@ -80,6 +86,8 @@ wget -q -O /tmp/snell.zip "$SNELL_URL" || {
     echo "❌ Snell 下载失败，请检查网络或官方下载站状态"
     exit 1
 }
+
+rm -f /usr/local/bin/snell-server
 unzip -q -o /tmp/snell.zip -d /usr/local/bin/ && rm -f /tmp/snell.zip
 chmod +x /usr/local/bin/snell-server
 
