@@ -8,7 +8,7 @@ NET_MODE=${3:-}
 SNELL_VERSION="v5.0.1"
 
 echo "=========================================="
-echo " Snell 极简原生部署脚本（纯净专机版）"
+echo " Snell 部署脚本"
 echo "=========================================="
 
 if [ "$EUID" -ne 0 ]; then echo "Error: Run as root"; exit 1; fi
@@ -16,7 +16,7 @@ if [ "$EUID" -ne 0 ]; then echo "Error: Run as root"; exit 1; fi
 # 1. 安装基础工具
 echo "📦 安装依赖 (wget, unzip, curl, ufw, iproute2, e2fsprogs, cron)..."
 apt-get update -qq || true
-apt-get install -y -qq wget unzip curl ufw iproute2 e2fsprogs cron >/dev/null 2>&1
+apt-get install -y -qq wget unzip curl ufw iproute2 cron >/dev/null 2>&1
 
 # 2. 修复 Debian 11 源 (仅限 Bullseye)
 if [ -f /etc/os-release ]; then
@@ -38,7 +38,6 @@ echo "🌐 优化网络配置 (IPv4 优先, DNS, BBR)..."
 grep -q "precedence ::ffff:0:0/96 100" /etc/gai.conf 2>/dev/null || echo "precedence ::ffff:0:0/96 100" >> /etc/gai.conf
 
 systemctl disable systemd-resolved --now 2>/dev/null || true
-chattr -i /etc/resolv.conf 2>/dev/null || true
 cat > /etc/resolv.conf << EOF
 nameserver 1.1.1.1
 nameserver 8.8.8.8
@@ -115,8 +114,11 @@ RestartSec=3s
 WantedBy=multi-user.target
 EOF
 
-systemctl daemon-reload && systemctl enable --now snell >/dev/null 2>&1
+systemctl daemon-reload
+systemctl enable snell >/dev/null 2>&1
+systemctl restart snell >/dev/null 2>&1
 sleep 2
+
 if ! systemctl is-active --quiet snell; then
     echo "❌ Snell 启动失败:" && journalctl -u snell -n 20 --no-pager && exit 1
 fi
@@ -140,7 +142,7 @@ chmod 644 /etc/cron.d/snell-cleanup && systemctl reload cron >/dev/null 2>&1 || 
 
 # 8. 完成输出
 echo -e "\n=============================="
-echo " ✅ Snell 极简原生部署完成"
+echo " ✅ Snell 部署完成"
 echo "=============================="
 echo " IPv4 : $IPV4"
 echo " IPv6 : $IPV6"
