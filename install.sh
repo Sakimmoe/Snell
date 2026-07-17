@@ -108,14 +108,10 @@ fi
 
 echo "🛡️ 配置防火墙..."
 
-# 清理所有旧 Snell 端口规则（简化可靠版）
-ufw status | grep Snell | while read line; do
-    port=$(echo "$line" | awk '{print $1}' | cut -d'/' -f1)
-    if [ "$port" != "$SNELL_PORT" ]; then
-        ufw delete allow $port/tcp >/dev/null 2>&1 || true
-        ufw delete allow $port/udp >/dev/null 2>&1 || true
-    fi
-done
+# 重置 UFW 并重新添加必要规则（最可靠方式）
+ufw --force reset >/dev/null 2>&1 || true
+ufw default deny incoming >/dev/null 2>&1 || true
+ufw default allow outgoing >/dev/null 2>&1 || true
 
 # SSH 端口检测
 SSH_PORT=""
@@ -133,8 +129,6 @@ ufw allow 22/tcp comment 'SSH fallback' >/dev/null 2>&1 || true
 ufw allow ${SSH_PORT}/tcp comment 'SSH' >/dev/null 2>&1 || true
 ufw allow ${SNELL_PORT}/tcp comment 'Snell TCP' >/dev/null 2>&1 || true
 ufw allow ${SNELL_PORT}/udp comment 'Snell UDP' >/dev/null 2>&1 || true
-ufw default deny incoming >/dev/null 2>&1 || true
-ufw default allow outgoing >/dev/null 2>&1 || true
 ufw --force enable >/dev/null 2>&1 || true
 ufw reload >/dev/null 2>&1 || true
 echo "✅ UFW 配置完成"
