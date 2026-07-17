@@ -5,71 +5,78 @@ export DEBIAN_FRONTEND=noninteractive
 SNELL_PORT=${1:-26216}
 SNELL_PSK=${2:-kokonoeyukari}
 NET_MODE=${3:-}
+SNELL_VERSION="v5.0.1" # 当前官方最新版
 
-echo "=============================="
-echo " Snell v5 官方版一键部署"
-echo "=============================="
+echo "=========================================="
+echo " Snell 官方原生一体化部署脚本（免 Docker 优化版）"
+echo "=========================================="
 
 if [ "$EUID" -ne 0 ]; then
-    echo "请使用 root 运行"
-    exit 1
+  echo "Error: Run as root"
+  exit 1
 fi
 
-echo "-> 检查系统..."
+# ======================================================================
+# 0. 检查并清理旧的 Docker 部署痕迹（防止端口冲突）
+if [ -d "/root/snelldocker" ]; then
+    echo "♻️ 发现旧版 Docker 部署痕迹，正在清理..."
+    if command -v docker >/dev/null 2>&1; then
+        (cd /root/snelldocker && docker compose down 2>/dev/null) || true
+    fi
+    rm -rf /root/snelldocker
+fi
+
+# 安装基础依赖
+echo "📦 安装基础工具 (wget, unzip, curl, ufw, fail2ban)..."
+apt-get update -qq || true
+apt-get install -y -qq wget unzip curl ufw fail2ban >/dev/null 2>&1
+
+# 1. 自动修复 Debian 11 软件源
+echo "-> 检查并修复 APT 软件源..."
 if [ -f /etc/os-release ]; then
     . /etc/os-release
     CODENAME="${VERSION_CODENAME:-}"
 fi
-
 if [ "$CODENAME" = "bullseye" ]; then
-    cat >/etc/apt/sources.list <<EOF
+    cat > /etc/apt/sources.list << 'EOF'
 deb http://archive.debian.org/debian bullseye main contrib non-free
 EOF
     rm -f /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
 fi
+apt-get update -qq || true
 
-apt-get update -y
+# 2. 系统优化
+echo "🌐 Setting IPv4 priority..."
+grep -q "precedence ::ffff:0:0/96 100" /etc/gai.conf 2>/dev/null || echo "precedence ::ffff:0:0/96 100" >> /etc/gai.conf
 
-echo "-> 安装依赖..."
-apt-get install -y \
-    curl \
-    wget \
-    unzip \
-    ufw \
-    fail2ban \
-    ca-certificates
-
-echo "-> 设置 IPv4 优先..."
-grep -q "precedence ::ffff:0:0/96 100" /etc/gai.conf 2>/dev/null || \
-    echo "precedence ::ffff:0:0/96 100" >> /etc/gai.conf
-
-echo "-> 配置 DNS..."
-systemctl disable systemd-resolved --now 2>/dev/null || true
+echo "🌐 Config DNS..."
+if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+    systemctl disable systemd-resolved --now 2>/dev/null || true
+fi
 chattr -i /etc/resolv.conf 2>/dev/null || true
-cat >/etc/resolv.conf <<EOF
+cat > /etc/resolv.conf << EOF
 nameserver 1.1.1.1
 nameserver 8.8.8.8
 nameserver 2606:4700:4700::1111
 nameserver 2001:4860:4860::8888
 EOF
 
-echo "-> 启用 BBR..."
-cat >/etc/sysctl.d/99-network-opt.conf <<EOF
+echo "🕒 Setting timezone to Asia/Shanghai..."
+timedatectl set-timezone Asia/Shanghai 2>/dev/null || true
+
+echo "⚡ Enable BBR & TFO..."
+cat > /etc/sysctl.d/99-network-opt.conf << 'EOF'
 net.core.default_qdisc=fq
 net.ipv4.tcp_congestion_control=bbr
+net.ipv4.tcp_fastopen=3
 EOF
-sysctl --system >/dev/null
+sysctl --system >/dev/null || true
 
-echo "-> 获取公网 IP..."
-IPV4=$(curl -4 -s --max-time 5 https://api.ipify.org || echo "无")
-IPV6=$(curl -6 -s --connect-timeout 5 https://api64.ipify.org || echo "无")
-
-# 6. 修正公网 IP（纯 IPv6 服务器也能正常工作）
-if [ "$IPV4" != "无" ]; then
-    MAIN_IP=$IPV4
-else
-    MAIN_IP=$IPV6
-fi
+# 3. IP 获取与网络模式判断
+echo "📡 Detect IP..."
+IPV4=$(curl -4 -s --max-time 5 https://api.ipify.org || curl -4 -s --max-time 5 https://ifconfig.me || echo "无")
+IPV6=$(curl -6 -s --connect-timeout 3 https://api64.ipify.org || echo "无")
+MAIN_IP=${IPV4:-$IPV6}
 
 if [ "$NET_MODE" = "4" ]; then
     LISTEN_ADDR="0.0.0.0"
@@ -83,148 +90,118 @@ else
     fi
 fi
 
-# ==================== 新增功能 ====================
+# 4. 下载并部署官方 Snell 原生程序
+echo "🚀 开始下载部署 Snell 官方二进制文件..."
 
-# 1. 安装前自动删除旧 Docker Snell
-echo "-> 清理旧版 Snell..."
-systemctl stop snell 2>/dev/null || true
-systemctl disable snell 2>/dev/null || true
-
-if command -v docker >/dev/null 2>&1; then
-    docker rm -f snell 2>/dev/null || true
-    docker ps -a --format '{{.Names}}' | grep -i snell | while read c; do
-        [ -n "$c" ] && docker rm -f "$c" 2>/dev/null || true
-    done
-    docker compose -f /root/snelldocker/docker-compose.yml down 2>/dev/null || true
-fi
-
-rm -rf /root/snelldocker
-rm -rf /opt/snell
-
-# 2. 安装前检查端口占用
-if ss -tlnp | grep -q ":${SNELL_PORT} "; then
-    echo
-    echo "错误：端口 ${SNELL_PORT} 已被占用"
-    ss -tlnp | grep ":${SNELL_PORT} "
-    exit 1
-fi
-
-# ==================== 下载与安装 ====================
-
-echo "-> 下载 Snell v5..."
-mkdir -p /opt/snell
-
+# 判断系统架构
 ARCH=$(uname -m)
 case "$ARCH" in
-    x86_64|amd64)
-        SNELL_URL="https://dl.nssurge.com/snell/snell-server-v5.0.1-linux-amd64.zip"
-        ;;
-    aarch64|arm64)
-        SNELL_URL="https://dl.nssurge.com/snell/snell-server-v5.0.1-linux-aarch64.zip"
-        ;;
-    armv7l)
-        SNELL_URL="https://dl.nssurge.com/snell/snell-server-v5.0.1-linux-armv7l.zip"
-        ;;
-    *)
-        echo "不支持架构: $ARCH"
-        exit 1
-        ;;
+    x86_64) SNELL_ARCH="amd64" ;;
+    aarch64) SNELL_ARCH="aarch64" ;;
+    *) echo "❌ 不支持的架构: $ARCH"; exit 1 ;;
 esac
 
-wget -O /tmp/snell.zip "$SNELL_URL"
-unzip -o /tmp/snell.zip -d /opt/snell
-chmod +x /opt/snell/snell-server
+SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-${SNELL_ARCH}.zip"
 
-echo "-> 创建配置文件..."
-cat >/etc/snell-server.conf <<EOF
+# 创建目录并下载
+mkdir -p /etc/snell
+wget -q -O /tmp/snell-server.zip "$SNELL_URL"
+unzip -q -o /tmp/snell-server.zip -d /usr/local/bin/
+rm -f /tmp/snell-server.zip
+chmod +x /usr/local/bin/snell-server
+
+# 生成配置文件
+cat > /etc/snell/snell-server.conf << EOF
 [snell-server]
 listen = ${LISTEN_ADDR}:${SNELL_PORT}
 psk = ${SNELL_PSK}
 ipv6 = ${ENABLE_IPV6}
 EOF
 
-echo "-> 创建 systemd 服务..."
-cat >/etc/systemd/system/snell.service <<EOF
+# 生成 Systemd 服务文件
+cat > /etc/systemd/system/snell.service << EOF
 [Unit]
 Description=Snell Proxy Service
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=/opt/snell/snell-server -c /etc/snell-server.conf
-Restart=always
-RestartSec=3
+LimitNOFILE=32768
+ExecStart=/usr/local/bin/snell-server -c /etc/snell/snell-server.conf
+Restart=on-failure
+RestartSec=3s
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
+# 启动 Snell 服务
 systemctl daemon-reload
-systemctl enable snell
+systemctl enable snell >/dev/null 2>&1
 systemctl restart snell
+echo "✅ Snell 官方原生服务已启动"
 
-# 4. 安装后验证启动成功
-sleep 2
-if ! systemctl is-active --quiet snell; then
-    echo
-    echo "Snell 启动失败"
-    journalctl -u snell -n 50 --no-pager
-    exit 1
-fi
+# 5. ufw + fail2ban + 每周清理
+echo ""
+echo "🛡️ 配置 ufw + fail2ban + 每周日 07:07 清理..."
 
-echo "-> 配置 UFW..."
 SSH_PORT=22
 if command -v sshd >/dev/null 2>&1; then
     DETECTED=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}' || true)
     [ -n "$DETECTED" ] && SSH_PORT=$DETECTED
 fi
 
-ufw default deny incoming || true
-ufw default allow outgoing || true
-ufw allow ${SSH_PORT}/tcp comment 'SSH'
-ufw allow ${SNELL_PORT}/tcp comment 'Snell'
-ufw --force enable
+ufw default deny incoming 2>/dev/null || true
+ufw default allow outgoing 2>/dev/null || true
+ufw allow ${SSH_PORT}/tcp comment 'SSH' 2>/dev/null || true
+ufw allow ${SNELL_PORT}/tcp comment 'Snell' 2>/dev/null || true
+ufw allow ${SNELL_PORT}/udp comment 'Snell' 2>/dev/null || true
 
-echo "-> 配置 Fail2ban..."
-cat >/etc/fail2ban/jail.d/ssh.conf <<EOF
+cat > /etc/fail2ban/jail.d/ssh.conf << 'JAILEOF'
 [sshd]
 enabled = true
 backend = systemd
 maxretry = 3
 bantime = 7h
 findtime = 10m
-EOF
-systemctl enable fail2ban
-systemctl restart fail2ban
+JAILEOF
+systemctl enable fail2ban 2>/dev/null || true
+systemctl restart fail2ban 2>/dev/null || true
 
-echo "-> 配置每周自动清理..."
-cat >/etc/cron.d/snell-cleanup <<'EOF'
+echo "🔥 启用 ufw..."
+ufw --force enable 2>/dev/null || echo "ufw enable 完成或已启用"
+
+# 垃圾清理脚本 (已去除 docker 相关的清理)
+cat > /etc/cron.d/snell-cleanup << 'CRONEOF'
 7 7 * * 0 root /bin/bash -c '
-apt-get clean
-apt-get autoremove -y
-journalctl --vacuum-time=7d
-find /tmp -type f -mtime +7 -delete
-find /var/tmp -type f -mtime +7 -delete
+  echo "[$(date \"+\%F \%T\")] Starting weekly cleanup..." >> /var/log/snell-cleanup.log 2>/dev/null || true
+  apt-get clean 2>/dev/null || true
+  apt-get autoremove -y 2>/dev/null || true
+  journalctl --vacuum-time=7d 2>/dev/null || true
+  find /tmp -type f -mtime +7 -delete 2>/dev/null || true
+  find /var/tmp -type f -mtime +7 -delete 2>/dev/null || true
+  echo "[$(date \"+\%F \%T\")] Weekly cleanup completed." >> /var/log/snell-cleanup.log 2>/dev/null || true
 '
-EOF
-chmod 644 /etc/cron.d/snell-cleanup
+CRONEOF
+chmod 644 /etc/cron.d/snell-cleanup 2>/dev/null || true
 systemctl reload cron 2>/dev/null || true
+echo "✅ ufw + fail2ban + 每周清理配置完成"
 
-# 5. 自动输出运行状态（PID）
-SNELL_PID=$(pgrep -f snell-server || true)
-
-echo
+# 最终输出
+echo ""
 echo "=============================="
-echo " Snell 部署完成"
+echo " Snell 原生部署完成"
 echo "=============================="
 echo " IPv4 : $IPV4"
 echo " IPv6 : $IPV6"
 echo " Port : $SNELL_PORT"
-echo " PSK  : $SNELL_PSK"
-echo " PID  : ${SNELL_PID:-未找到}"
-echo " Mode : $([ "$NET_MODE" = "4" ] && echo "IPv4-Only" || echo "Dual-Stack")"
+echo " PSK : $SNELL_PSK"
+echo " Mode : $([ "$NET_MODE" = "4" ] && echo "IPv4 Only" || echo "Dual Stack")"
+echo " Fail2ban : maxretry=3, bantime=7h"
+echo " Weekly Cleanup : 每周日 07:07 (Asia/Shanghai)"
+echo " Service Status : systemctl status snell"
 echo "=============================="
-echo
+echo ""
 echo "Surge 配置："
 echo "Snell_${SNELL_PORT} = snell, ${MAIN_IP}, ${SNELL_PORT}, psk=${SNELL_PSK}, version=5, tfo=true, reuse=true, ecn=true"
 echo "=============================="
