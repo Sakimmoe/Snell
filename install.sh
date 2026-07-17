@@ -108,11 +108,12 @@ fi
 
 echo "🛡️ 配置防火墙..."
 
-# 清理所有非当前 Snell 端口的规则（最稳健方式）
-for port in $(ufw status numbered | grep 'Snell' | awk '{print $2}' | cut -d'/' -f1 | sort -u); do
+# 清理所有旧 Snell 端口规则（简化可靠版）
+ufw status | grep Snell | while read line; do
+    port=$(echo "$line" | awk '{print $1}' | cut -d'/' -f1)
     if [ "$port" != "$SNELL_PORT" ]; then
-        ufw delete allow ${port}/tcp >/dev/null 2>&1 || true
-        ufw delete allow ${port}/udp >/dev/null 2>&1 || true
+        ufw delete allow $port/tcp >/dev/null 2>&1 || true
+        ufw delete allow $port/udp >/dev/null 2>&1 || true
     fi
 done
 
