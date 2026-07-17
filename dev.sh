@@ -5,11 +5,10 @@ export DEBIAN_FRONTEND=noninteractive
 SNELL_PORT=${1:-26216}
 SNELL_PSK=${2:-kokonoeyukari}
 NET_MODE=${3:-}
-
 SNELL_VERSION="v5.0.1"
 
 echo "=========================================="
-echo " Snell 部署脚本 (改进版)"
+echo " Snell 部署脚本"
 echo "=========================================="
 
 if [ "$EUID" -ne 0 ]; then
@@ -18,44 +17,29 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # 1. 安装基础工具
-echo "📦 安装依赖 (wget, unzip, curl, ufw, iproute2, cron)..."
+echo "📦 安装依赖..."
 apt-get update -qq || true
 apt-get install -y -qq wget unzip curl ufw iproute2 cron 2>/dev/null || true
 
-# 2. 修复 Debian 11 (Bullseye) 软件源 - 仅在 LTS 期间使用官方源
-if [ -f /etc/os-release ]; then
-    . /etc/os-release
-fi
-
-if [ "${VERSION_CODENAME:-}" = "bullseye" ]; then
-    echo "-> 配置 Debian 11 (Bullseye) LTS 软件源..."
-    cat > /etc/apt/sources.list << 'EOF'
-deb http://deb.debian.org/debian bullseye main contrib non-free
-deb http://deb.debian.org/debian bullseye-updates main contrib non-free
-deb http://security.debian.org/debian-security bullseye-security main contrib non-free
-EOF
-    rm -f /etc/apt/apt.conf.d/99no-check-valid 2>/dev/null || true
-    rm -f /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
-    apt-get update -qq || true
-fi
-
-# 3. 系统网络优化 (IPv4 优先, DNS, BBR)
-echo "🌐 优化网络配置 (IPv4 优先, DNS, BBR)..."
+# 2. 系统网络优化
+echo "🌐 优化网络配置..."
 grep -q "precedence ::ffff:0:0/96 100" /etc/gai.conf 2>/dev/null || echo "precedence ::ffff:0:0/96 100" >> /etc/gai.conf
 systemctl disable systemd-resolved --now 2>/dev/null || true
+
 cat > /etc/resolv.conf << EOF
 nameserver 1.1.1.1
 nameserver 8.8.8.8
 nameserver 2606:4700:4700::1111
 nameserver 2001:4860:4860::8888
 EOF
+
 cat > /etc/sysctl.d/99-bbr.conf << 'EOF'
 net.core.default_qdisc=fq
 net.ipv4.tcp_congestion_control=bbr
 EOF
 sysctl --system >/dev/null || true
 
-# 4. IP 获取与网络模式
+# 3. 获取服务器 IP
 echo "📡 获取服务器 IP..."
 IPV4=$(curl -4 -s --max-time 5 https://api.ipify.org || echo "无")
 IPV6=$(curl -6 -s --connect-timeout 3 https://api64.ipify.org || echo "无")
@@ -69,7 +53,7 @@ else
     ENABLE_IPV6=$([ "$IPV6" != "无" ] && echo "true" || echo "false")
 fi
 
-# 5. 部署 Snell
+# 4. 部署 Snell
 systemctl stop snell 2>/dev/null || true
 sleep 1
 
@@ -131,9 +115,8 @@ if ! systemctl is-active --quiet snell; then
     exit 1
 fi
 
-# 6. 配置 UFW（云服务器上经常失败，改为容错模式）
+# 5. 配置 UFW
 echo "🛡️ 配置防火墙 (UFW)..."
-echo "   注意: 国内云服务器（腾讯云/阿里云等）建议直接在「安全组」放行端口，而不是依赖 ufw"
 SSH_PORT=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}' || echo "22")
 
 ufw default deny incoming >/dev/null 2>&1 || true
@@ -143,14 +126,14 @@ ufw allow ${SNELL_PORT}/tcp comment 'Snell TCP' >/dev/null 2>&1 || true
 ufw allow ${SNELL_PORT}/udp comment 'Snell UDP' >/dev/null 2>&1 || true
 ufw --force enable >/dev/null 2>&1 || true
 
-# 7. 每周清理任务
+# 6. 每周自动清理
 echo "🧹 配置每周自动清理..."
 cat > /etc/cron.d/snell-cleanup << 'CRONEOF'
 7 7 * * 0 root /bin/bash -c 'apt-get clean && apt-get autoremove -y && journalctl --vacuum-time=7d && find /tmp /var/tmp -type f -mtime +7 -delete' >/dev/null 2>&1
 CRONEOF
 chmod 644 /etc/cron.d/snell-cleanup
 
-# 8. 完成输出
+# 7. 输出结果
 echo -e "\n=============================="
 echo " ✅ Snell 部署完成"
 echo "=============================="
@@ -162,9 +145,4 @@ echo " Mode : $([ "$NET_MODE" = "4" ] && echo "IPv4 Only" || echo "Dual Stack")"
 echo "=============================="
 echo "Surge 配置："
 echo "Snell_${SNELL_PORT} = snell, ${MAIN_IP}, ${SNELL_PORT}, psk=${SNELL_PSK}, version=5, reuse=true, ecn=true"
-echo "=============================="
-echo ""
-echo "⚠️ 重要提醒："
-echo "如果你的服务器是腾讯云/阿里云等国内云服务器，请务必到控制台「安全组」手动放行端口 ${SNELL_PORT} (TCP + UDP)"
-echo "否则即使 ufw 配置了也可能无法连接。"
 echo "=============================="
