@@ -57,18 +57,22 @@ generate_random_psk() {
     openssl rand -base64 24 | tr -d '\n'
 }
 
-# 修复 Debian 11 (bullseye) 旧源
+# 修复 Debian 11 (bullseye) 旧源（更稳健版）
 fix_debian_sources() {
     if [ -f /etc/os-release ]; then
         . /etc/os-release
         local codename="${VERSION_CODENAME:-}"
         if [ "$codename" = "bullseye" ]; then
-            log_info "检测到 Debian 11 bullseye，修复 APT 源..."
+            log_info "检测到 Debian 11 bullseye (已 EOL)，使用 archive.debian.org 源..."
             cat > /etc/apt/sources.list << 'EOF'
 deb http://archive.debian.org/debian bullseye main contrib non-free
+deb http://archive.debian.org/debian bullseye-updates main contrib non-free
 deb http://archive.debian.org/debian-security bullseye-security main contrib non-free
 EOF
-            rm -f /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
+            rm -f /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list.d/*.list 2>/dev/null || true
+
+            # 允许 release info 变更，并容忍部分源问题
+            apt-get update -qq --allow-releaseinfo-change 2>/dev/null || apt-get update -qq || true
         fi
     fi
 }
@@ -76,7 +80,10 @@ EOF
 # 安装必要工具
 install_tools() {
     log_info "安装必要依赖工具..."
-    DEBIAN_FRONTEND=noninteractive apt-get update -qq
+    # 容忍 apt update 失败（尤其是旧系统）
+    if ! DEBIAN_FRONTEND=noninteractive apt-get update -qq 2>/dev/null; then
+        log_warn "apt update 遇到问题（可能是源配置），尝试继续安装..."
+    fi
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
         curl wget unzip openssl ufw fail2ban netcat-openbsd iproute2 ca-certificates \
         2>/dev/null || log_warn "部分软件包安装可能不完整，但不影响核心功能"
