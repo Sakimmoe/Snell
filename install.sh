@@ -49,13 +49,6 @@ else
 fi
 
 echo "🚀 部署 Snell..."
-
-# 更可靠的旧端口检测（必须在写入新配置前）
-OLD_SNELL_PORT=""
-if [ -f /etc/snell/snell-server.conf ]; then
-    OLD_SNELL_PORT=$(grep '^listen' /etc/snell/snell-server.conf 2>/dev/null | grep -oE '[0-9]+$' | head -1)
-fi
-
 systemctl stop snell 2>/dev/null || true
 sleep 1
 
@@ -115,12 +108,13 @@ fi
 
 echo "🛡️ 配置防火墙..."
 
-# 删除旧端口（更可靠方式）
-if [ -n "$OLD_SNELL_PORT" ] && [ "$OLD_SNELL_PORT" != "$SNELL_PORT" ]; then
-    echo "清理旧端口 ${OLD_SNELL_PORT} ..."
-    ufw delete allow ${OLD_SNELL_PORT}/tcp >/dev/null 2>&1 || true
-    ufw delete allow ${OLD_SNELL_PORT}/udp >/dev/null 2>&1 || true
-fi
+# 清理所有非当前 Snell 端口的规则（最稳健方式）
+for port in $(ufw status numbered | grep 'Snell' | awk '{print $2}' | cut -d'/' -f1 | sort -u); do
+    if [ "$port" != "$SNELL_PORT" ]; then
+        ufw delete allow ${port}/tcp >/dev/null 2>&1 || true
+        ufw delete allow ${port}/udp >/dev/null 2>&1 || true
+    fi
+done
 
 # SSH 端口检测
 SSH_PORT=""
