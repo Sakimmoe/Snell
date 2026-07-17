@@ -117,14 +117,27 @@ fi
 
 # 5. 配置 UFW
 echo "🛡️ 配置防火墙 (UFW)..."
-SSH_PORT=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}' || echo "22")
 
-ufw default deny incoming >/dev/null 2>&1 || true
-ufw default allow outgoing >/dev/null 2>&1 || true
+SSH_PORT=""
+if [ -f /etc/ssh/sshd_config ]; then
+    SSH_PORT=$(grep -Ei '^\s*Port\s+' /etc/ssh/sshd_config | head -1 | awk '{print $2}' | tr -d '\r\n')
+fi
+if [ -z "$SSH_PORT" ] && [ -d /etc/ssh/sshd_config.d ]; then
+    SSH_PORT=$(grep -Ei '^\s*Port\s+' /etc/ssh/sshd_config.d/*.conf 2>/dev/null | head -1 | awk '{print $2}' | tr -d '\r\n')
+fi
+if ! [[ "$SSH_PORT" =~ ^[0-9]+$ ]]; then
+    SSH_PORT=22
+fi
+
 ufw allow ${SSH_PORT}/tcp comment 'SSH' >/dev/null 2>&1 || true
 ufw allow ${SNELL_PORT}/tcp comment 'Snell TCP' >/dev/null 2>&1 || true
 ufw allow ${SNELL_PORT}/udp comment 'Snell UDP' >/dev/null 2>&1 || true
+
+ufw default deny incoming >/dev/null 2>&1 || true
+ufw default allow outgoing >/dev/null 2>&1 || true
 ufw --force enable >/dev/null 2>&1 || true
+
+echo "✅ UFW 配置完成"
 
 # 6. 每周自动清理
 echo "🧹 配置每周自动清理..."
