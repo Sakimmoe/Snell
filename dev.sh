@@ -8,7 +8,7 @@ NET_MODE=${3:-}
 SNELL_VERSION="v5.0.1" # 当前官方最新版
 
 echo "=========================================="
-echo " Snell 官方原生一体化部署脚本（免 Docker 优化版）"
+echo " Snell 官方原生一体化部署脚本（免 Docker 完美优化版）"
 echo "=========================================="
 
 if [ "$EUID" -ne 0 ]; then
@@ -17,21 +17,28 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # ======================================================================
-# 0. 检查并清理旧的 Docker 部署痕迹（防止端口冲突）
+# 0. 检查并彻底清理旧的 Docker 部署痕迹（防止端口冲突）
+echo "♻️ 检查 Docker 部署痕迹..."
 if [ -d "/root/snelldocker" ]; then
-    echo "♻️ 发现旧版 Docker 部署痕迹，正在清理..."
     if command -v docker >/dev/null 2>&1; then
         (cd /root/snelldocker && docker compose down 2>/dev/null) || true
     fi
     rm -rf /root/snelldocker
 fi
+# 深度清理可能遗留的 Snell 容器
+if command -v docker >/dev/null 2>&1; then
+    docker ps -a --format '{{.Names}}' | grep -i snell | while read c
+    do
+        [ -n "$c" ] && docker rm -f "$c" 2>/dev/null || true
+    done
+fi
 
-# 安装基础依赖
-echo "📦 安装基础工具 (wget, unzip, curl, ufw, fail2ban)..."
+# 安装基础依赖 (包含 iproute2 提供 ss 命令)
+echo "📦 安装基础工具 (wget, unzip, curl, ufw, fail2ban, iproute2)..."
 apt-get update -qq || true
-apt-get install -y -qq wget unzip curl ufw fail2ban >/dev/null 2>&1
+apt-get install -y -qq wget unzip curl ufw fail2ban iproute2 >/dev/null 2>&1
 
-# 1. 自动修复 Debian 11 软件源
+# 1. 自动修复 Debian 11 软件源（解决 Archive 证书/有效期过期报错）
 echo "-> 检查并修复 APT 软件源..."
 if [ -f /etc/os-release ]; then
     . /etc/os-release
@@ -40,7 +47,9 @@ fi
 if [ "$CODENAME" = "bullseye" ]; then
     cat > /etc/apt/sources.list << 'EOF'
 deb http://archive.debian.org/debian bullseye main contrib non-free
+deb http://archive.debian.org/debian-security bullseye-security main contrib non-free
 EOF
+    echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-valid
     rm -f /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
 fi
 apt-get update -qq || true
@@ -76,7 +85,12 @@ sysctl --system >/dev/null || true
 echo "📡 Detect IP..."
 IPV4=$(curl -4 -s --max-time 5 https://api.ipify.org || curl -4 -s --max-time 5 https://ifconfig.me || echo "无")
 IPV6=$(curl -6 -s --connect-timeout 3 https://api64.ipify.org || echo "无")
-MAIN_IP=${IPV4:-$IPV6}
+
+if [ "$IPV4" != "无" ]; then
+    MAIN_IP="$IPV4"
+else
+    MAIN_IP="$IPV6"
+fi
 
 if [ "$NET_MODE" = "4" ]; then
     LISTEN_ADDR="0.0.0.0"
@@ -91,8 +105,14 @@ else
 fi
 
 # 4. 下载并部署官方 Snell 原生程序
-echo "🚀 开始下载部署 Snell 官方二进制文件..."
+echo "🔍 检查端口占用情况..."
+if ss -tlnp | grep -q ":${SNELL_PORT} "; then
+    echo "❌ 端口 ${SNELL_PORT} 已被占用，占用进程信息如下："
+    ss -tlnp | grep ":${SNELL_PORT} "
+    exit 1
+fi
 
+echo "🚀 开始下载部署 Snell 官方二进制文件..."
 # 判断系统架构
 ARCH=$(uname -m)
 case "$ARCH" in
@@ -135,10 +155,16 @@ RestartSec=3s
 WantedBy=multi-user.target
 EOF
 
-# 启动 Snell 服务
+# 启动 Snell 服务并验证
 systemctl daemon-reload
 systemctl enable snell >/dev/null 2>&1
 systemctl restart snell
+sleep 2
+if ! systemctl is-active --quiet snell; then
+    echo "❌ Snell 启动失败，最近日志如下："
+    journalctl -u snell -n 50 --no-pager
+    exit 1
+fi
 echo "✅ Snell 官方原生服务已启动"
 
 # 5. ufw + fail2ban + 每周清理
@@ -155,7 +181,6 @@ ufw default deny incoming 2>/dev/null || true
 ufw default allow outgoing 2>/dev/null || true
 ufw allow ${SSH_PORT}/tcp comment 'SSH' 2>/dev/null || true
 ufw allow ${SNELL_PORT}/tcp comment 'Snell' 2>/dev/null || true
-ufw allow ${SNELL_PORT}/udp comment 'Snell' 2>/dev/null || true
 
 cat > /etc/fail2ban/jail.d/ssh.conf << 'JAILEOF'
 [sshd]
@@ -171,7 +196,7 @@ systemctl restart fail2ban 2>/dev/null || true
 echo "🔥 启用 ufw..."
 ufw --force enable 2>/dev/null || echo "ufw enable 完成或已启用"
 
-# 垃圾清理脚本 (已去除 docker 相关的清理)
+# 垃圾清理脚本 (纯净版)
 cat > /etc/cron.d/snell-cleanup << 'CRONEOF'
 7 7 * * 0 root /bin/bash -c '
   echo "[$(date \"+\%F \%T\")] Starting weekly cleanup..." >> /var/log/snell-cleanup.log 2>/dev/null || true
