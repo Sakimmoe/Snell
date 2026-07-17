@@ -50,10 +50,10 @@ fi
 
 echo "🚀 部署 Snell..."
 
-# 在写入新配置前检测旧端口
+# 更可靠的旧端口检测（必须在写入新配置前）
 OLD_SNELL_PORT=""
 if [ -f /etc/snell/snell-server.conf ]; then
-    OLD_SNELL_PORT=$(awk -F'[: ]+' '/^listen\s*=/ {print $NF}' /etc/snell/snell-server.conf 2>/dev/null | head -1)
+    OLD_SNELL_PORT=$(grep '^listen' /etc/snell/snell-server.conf 2>/dev/null | grep -oE '[0-9]+$' | head -1)
 fi
 
 systemctl stop snell 2>/dev/null || true
@@ -115,7 +115,7 @@ fi
 
 echo "🛡️ 配置防火墙..."
 
-# 删除旧端口规则（更可靠的写法）
+# 删除旧端口（更可靠方式）
 if [ -n "$OLD_SNELL_PORT" ] && [ "$OLD_SNELL_PORT" != "$SNELL_PORT" ]; then
     echo "清理旧端口 ${OLD_SNELL_PORT} ..."
     ufw delete allow ${OLD_SNELL_PORT}/tcp >/dev/null 2>&1 || true
