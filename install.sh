@@ -50,7 +50,7 @@ fi
 
 echo "🚀 部署 Snell..."
 
-# 先检测旧端口（必须在写入新配置之前）
+# 在写入新配置前检测旧端口
 OLD_SNELL_PORT=""
 if [ -f /etc/snell/snell-server.conf ]; then
     OLD_SNELL_PORT=$(awk -F'[: ]+' '/^listen\s*=/ {print $NF}' /etc/snell/snell-server.conf 2>/dev/null | head -1)
@@ -115,11 +115,11 @@ fi
 
 echo "🛡️ 配置防火墙..."
 
-# 删除旧端口规则（如果端口发生变化）
+# 删除旧端口规则（更可靠的写法）
 if [ -n "$OLD_SNELL_PORT" ] && [ "$OLD_SNELL_PORT" != "$SNELL_PORT" ]; then
-    echo "清理旧端口 ${OLD_SNELL_PORT} 的规则..."
-    ufw delete allow ${OLD_SNELL_PORT}/tcp comment 'Snell TCP' >/dev/null 2>&1 || true
-    ufw delete allow ${OLD_SNELL_PORT}/udp comment 'Snell UDP' >/dev/null 2>&1 || true
+    echo "清理旧端口 ${OLD_SNELL_PORT} ..."
+    ufw delete allow ${OLD_SNELL_PORT}/tcp >/dev/null 2>&1 || true
+    ufw delete allow ${OLD_SNELL_PORT}/udp >/dev/null 2>&1 || true
 fi
 
 # SSH 端口检测
