@@ -138,7 +138,7 @@ echo "🧹 配置每周自动清理..."
 cat > /etc/cron.d/snell-cleanup << 'CRONEOF'
 7 7 * * 0 root /bin/bash -c 'apt-get clean && apt-get autoremove -y && journalctl --vacuum-time=7d && find /tmp /var/tmp -type f -mtime +7 -delete' >/dev/null 2>&1
 CRONEOF
-chmod 644 /etc/cron.d/snell-cleanup && systemctl reload cron >/dev/null 2>&1 || true
+chmod 644 /etc/cron.d/snell-cleanup
 
 # 8. 完成输出
 echo -e "\n=============================="
